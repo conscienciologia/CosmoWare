@@ -55,6 +55,9 @@ domains/
     administrador/
       configuracao-ic/
         organograma.js
+    pessoa-fisica/
+      voluntario/
+        organograma-voluntarios.js
     main.js
 templates/
   module-template.js
@@ -80,143 +83,6 @@ This section contains the contents of the repository's files.
 name: Feature request
 about: Sugira uma nova funcionalidade
 ---
-</file>
-
-<file path=".github/workflows/release.yml">
-name: Release
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-permissions:
-  contents: write  # necessário para criar tags e releases
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # precisamos do histórico para changelog e last tag
-
-      - name: Compute date-based version (YY.MM.DD.<ms>)
-        id: ver
-        shell: bash
-        run: |
-          DATE=$(date -u +'%y.%m.%d')
-          TS=$(date -u +%s%3N)   # timestamp em milissegundos UTC
-          VERSION="${DATE}.${TS}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Computed version: ${VERSION}"
-
-      - name: Update manifest.json (if present)
-        shell: bash
-        run: |
-          if [ -f manifest.json ]; then
-            echo "Updating manifest.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-          else
-            echo "manifest.json not found. Skipping."
-          fi
-
-      - name: Update package.json (if present)
-        shell: bash
-        run: |
-          if [ -f package.json ]; then
-            echo "Updating package.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
-          else
-            echo "package.json not found. Skipping."
-          fi
-
-      - name: Commit version bumps (if any)
-        shell: bash
-        run: |
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(release): v${{ steps.ver.outputs.version }}"
-          else
-            echo "No file changes to commit."
-          fi
-
-      - name: Create tag
-        shell: bash
-        run: |
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin "v${{ steps.ver.outputs.version }}" || {
-            echo "Tag push failed (maybe tag exists)."
-          }
-
-      - name: Generate changelog since last tag
-        id: changelog
-        shell: bash
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            echo "Last tag: $LAST_TAG"
-            echo "## Changes since $LAST_TAG" > body.md
-            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
-          else
-            echo "No previous tag. Listing all commits."
-            echo "## Initial Release Notes" > body.md
-            git log --pretty=format:'- %s (%h)' >> body.md
-          fi
-          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ steps.ver.outputs.version }}"
-          name: "v${{ steps.ver.outputs.version }}"
-          body_path: "${{ steps.changelog.outputs.body_path }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-</file>
-
-<file path=".github/workflows/repomix.yml">
-name: RepoMix
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-jobs:
-  build-repomix:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Generate RepoMix
-        run: |
-          npx --yes repomix --output REPOMIX.md
-
-      - name: Commit & Push RepoMix output
-        run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add REPOMIX.md
-            git commit -m "chore(repomix): update REPOMIX.md"
-            git push
-          else
-            echo "No changes to commit."
-          fi
 </file>
 
 <file path=".github/PULL_REQUEST_TEMPLATE.md">
@@ -642,72 +508,336 @@ export async function init(ctx) {
 }
 </file>
 
-<file path="domains/icnet/main.js">
-/*****************************************************
- * domains/icnet/main.js – Router do domínio ICNET
- * Decide qual módulo de tela carregar (por breadcrumb/URL)
- * Logs: [ICNET/MAIN]
- *****************************************************/
-export async function init(context) {
-  const { utils } = context;
-  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils;
-  const { log, warn } = nsLogger("[ICNET/MAIN]");
+<file path="domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js">
+// domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js
+// CosmoWare — ICNET | Geração de organograma (PlantUML WBS via Kroki) a partir da tabela de Voluntários
 
-  if (window.__ct_icnet_main_loaded) return;
-  window.__ct_icnet_main_loaded = true;
+export async function init(ctx) {
+  const {
+    nsLogger,
+    normalizeText,
+    readBreadcrumb,
+    attachSimpleObserver,
+    krokiPlantUmlToPng,
+    timeStampCompact,
+  } = ctx.utils || {};
 
-  // Rotas do domínio icnet
-  // match(ctx) → boolean, loader() → Promise<module>
-  const routes = [
-    {
-      name: "administrador/configuracao-ic/organograma",
-      match: (ctx) => {
-        const { norm } = readBreadcrumb(ctx.doc);
-        const alvo = normalizeText("Administrador » Configuração IC » Organograma");
-        // Heurística adicional (opcional): f=1028 no URL
-        const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href);
-        return norm.includes(alvo) || hintUrl;
-      },
-      loader: () =>
-        import(chrome.runtime.getURL(
-          "domains/icnet/administrador/configuracao-ic/organograma.js"
-        ))
+  // Logger compatível com main.js
+  const { log, warn } = nsLogger?.("[ICNET/PF-VOL]") || {
+    log: (...a) => console.log("[ICNET/PF-VOL]", ...a),
+    warn: (...a) => console.warn("[ICNET/PF-VOL]", ...a),
+  };
+  const ns = log;
+  const err = (...a) => console.error("[ICNET/PF-VOL]", ...a);
+
+  try {
+    ns("init: módulo carregado");
+
+    // 1) Validação de breadcrumb
+    const bcObj = readBreadcrumb?.(document) || { raw: "", norm: "" };
+    const alvo = normalizeText?.("Pessoa Física » Voluntário");
+    const bcOk = bcObj.norm === alvo;
+
+    ns("breadcrumb:", bcObj.raw, "=> ok?", bcOk);
+    if (!bcOk) {
+      warn("breadcrumb não confere — abortando.");
+      return;
     }
-    // Adicione novas rotas aqui no futuro
-  ];
 
-  let bootedOnce = false;
+    // 2) Selecionar a tabela alvo (#Grid1)
+    const grid = document.querySelector("#Grid1");
+    if (!grid) {
+      warn("tabela #Grid1 não encontrada — abortando.");
+      return;
+    }
 
-  async function tryRoute() {
-    if (bootedOnce) return;
-    const route = routes.find(r => {
-      try { return r.match(context); } catch { return false; }
-    });
-    if (!route) return;
+    // 3) Toolbar idempotente
+    const TOOLBAR_ID = "cosmoware-pf-vol-toolbar";
+    let toolbar = document.getElementById(TOOLBAR_ID);
+    if (!toolbar) {
+      toolbar = document.createElement("div");
+      toolbar.id = TOOLBAR_ID;
+      toolbar.className = "cosmoware-toolbar cosmoware-pf-vol-toolbar";
+      Object.assign(toolbar.style, {
+        display: "flex",
+        gap: "8px",
+        alignItems: "center",
+        margin: "8px 0",
+        padding: "6px 8px",
+        border: "1px solid #ddd",
+        borderRadius: "6px",
+        background: "#fafafa",
+        fontSize: "12px",
+      });
 
-    log("Rota detectada:", route.name);
-    try {
-      const mod = await route.loader();
-      if (typeof mod?.init !== "function") {
-        warn(`Módulo ${route.name} não exporta init()`);
-        return;
+      const btnRefresh = document.createElement("button");
+      btnRefresh.type = "button";
+      btnRefresh.className = "cosmoware-btn cosmoware-btn-refresh";
+      btnRefresh.textContent = "Atualizar";
+      Object.assign(btnRefresh.style, { cursor: "pointer" });
+
+      const btnDownload = document.createElement("a");
+      btnDownload.className = "cosmoware-btn cosmoware-btn-download";
+      btnDownload.textContent = "Baixar PNG";
+      btnDownload.href = "javascript:void(0)";
+      btnDownload.setAttribute(
+        "download",
+        `ICNET-voluntarios-${timeStampCompact?.() || Date.now()}.png`
+      );
+      Object.assign(btnDownload.style, { cursor: "pointer" });
+
+      const status = document.createElement("span");
+      status.className = "cosmoware-status";
+      status.textContent = "— pronto";
+      status.style.opacity = "0.7";
+
+      toolbar.appendChild(btnRefresh);
+      toolbar.appendChild(btnDownload);
+      toolbar.appendChild(status);
+
+      grid.parentElement?.insertBefore(toolbar, grid);
+
+      // Preview
+      const PREVIEW_ID = "cosmoware-pf-vol-preview";
+      if (!document.getElementById(PREVIEW_ID)) {
+        const preview = document.createElement("div");
+        preview.id = PREVIEW_ID;
+        preview.className = "cosmoware-preview cosmoware-pf-vol-preview";
+        Object.assign(preview.style, { margin: "6px 0 10px" });
+
+        const img = document.createElement("img");
+        img.className = "cosmoware-preview-img";
+        img.alt = "Organograma (PNG)";
+        Object.assign(img.style, {
+          maxWidth: "100%",
+          border: "1px solid #eee",
+          borderRadius: "4px",
+          background: "#fff",
+        });
+
+        preview.appendChild(img);
+        toolbar.parentElement?.insertBefore(preview, toolbar.nextSibling);
       }
-      await mod.init({ ...context, utils });
-      bootedOnce = true;
-      log(`Módulo ${route.name} inicializado.`);
-    } catch (e) {
-      console.error("[ICNET/MAIN]", "Falha ao carregar módulo:", route.name, e);
+
+      // Listeners
+      btnRefresh.addEventListener("click", () => {
+        renderFromGrid().catch((e) => err("render manual falhou:", e));
+      });
+
+      // Observer para mudanças no grid (ex.: paginação ASP.NET)
+      // Importante: attachSimpleObserver(callback, node)
+      attachSimpleObserver?.(() => {
+        clearTimeout(renderFromGrid.__t);
+        renderFromGrid.__t = setTimeout(() => {
+          ns("observer: mudanças detectadas na #Grid1 → atualizando organograma…");
+          renderFromGrid().catch((e) => err("render via observer falhou:", e));
+        }, 120);
+      }, grid);
+
+      ns("toolbar inserida com sucesso (idempotente).");
+    } else {
+      ns("toolbar já presente — mantendo idempotência.");
     }
+
+    // Primeira renderização
+    await renderFromGrid();
+
+    // ===== Funções internas =====
+
+    function extractVolunteers() {
+      const rows = Array.from(grid.querySelectorAll("tr")).filter(
+        (tr) =>
+          !tr.classList.contains("GridHeaderStyle") &&
+          !tr.classList.contains("GridPagerStyle")
+      );
+
+      const textPreservandoCase = (td) =>
+        String(td?.innerText ?? "").replace(/\s+/g, " ").trim();
+
+      const items = [];
+      for (const tr of rows) {
+        const tds = Array.from(tr.querySelectorAll("td"));
+        if (tds.length < 8) continue;
+
+        // Preserva maiúsculas/minúsculas originais para exibição
+        const nome = textPreservandoCase(tds[0]);
+        const pf = textPreservandoCase(tds[1]);
+        const ativoEl = tr.querySelector('input[type="checkbox"]');
+        const ativo = Boolean(ativoEl?.checked);
+        const unidade = textPreservandoCase(tds[3]);
+        const orgDepto = textPreservandoCase(tds[4]);
+        const funcao = textPreservandoCase(tds[5]);
+        const dataInicio = textPreservandoCase(tds[6]);
+        const dataSaida = textPreservandoCase(tds[7]);
+
+        // Inativo se houver Data Saída preenchida
+        const inativoPorSaida = dataSaida && dataSaida.trim().length > 0;
+        const ativoFinal = ativo && !inativoPorSaida;
+
+        items.push({
+          nome,
+          pf,
+          ativo: ativoFinal,
+          unidade,
+          orgDepto,
+          funcao,
+          dataInicio,
+          dataSaida,
+        });
+      }
+      return items;
+    }
+
+    // ---- WBS com estereótipos <<ativo>> e <<inativo>> + estilos no <style> ----
+    function buildPlantUml(vols) {
+      const esc = (s) => (s || "").trim();
+
+      // Árvore raiz com agrupamento por OrgDepto (split por "\")
+      const root = { name: "Voluntários", children: [], volunteers: [] };
+
+      for (const v of vols) {
+        const path = (v.orgDepto || "—").split("\\").map((p) => esc(p));
+        let node = root;
+        for (const part of path) {
+          let child = node.children.find((c) => c.name === part);
+          if (!child) {
+            child = { name: part, children: [], volunteers: [] };
+            node.children.push(child);
+          }
+          node = child;
+        }
+        node.volunteers.push(v);
+      }
+
+      // ======== Lógica do "raiz condicional" ========
+      // Se existir APENAS um nível raiz (ex.: "Colegiado Administrativo")
+      // e não houver voluntários diretamente em root, usamos esse nó como raiz
+      // e NÃO imprimimos "* Voluntários".
+      const onlyOneRoot =
+        root.volunteers.length === 0 && root.children.length === 1;
+
+      // Renderização
+      const lines = [];
+      lines.push("@startwbs");
+
+      // Estilos WBS (classes .ativo / .inativo)
+      lines.push("<style>");
+      lines.push("wbsDiagram {");
+      lines.push("  .ativo {");
+      lines.push("    BackgroundColor PaleGreen");
+      lines.push("  }");
+      lines.push("  .inativo {");
+      lines.push("    BackgroundColor LightGray");
+      lines.push("  }");
+      lines.push("}");
+      lines.push("</style>");
+
+      function renderNode(node, prefix) {
+        lines.push(`${prefix} ${node.name}`);
+
+        // Subnós (ordenados)
+        for (const child of node.children.sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )) {
+          renderNode(child, prefix + "*");
+        }
+
+        // Voluntários (ordenados por nome)
+        for (const v of node.volunteers.sort((a, b) =>
+          a.nome.localeCompare(b.nome)
+        )) {
+          const stereo = v.ativo ? "ativo" : "inativo";
+          const label = `${esc(v.nome)} (${esc(v.funcao) || "—"})`;
+          lines.push(`${prefix}* ${label} <<${stereo}>>`);
+        }
+      }
+
+      if (onlyOneRoot) {
+        // Usa o único filho como raiz
+        const single = root.children[0];
+        renderNode(single, "*");
+      } else {
+        // Mantém "Voluntários" como raiz visível
+        renderNode(root, "*");
+      }
+
+      lines.push("@endwbs");
+      return lines.join("\n");
+    }
+
+    async function renderFromGrid() {
+      const statusEl = document.querySelector(
+        "#" + TOOLBAR_ID + " .cosmoware-status"
+      );
+      const previewImg = document.querySelector(
+        "#cosmoware-pf-vol-preview .cosmoware-preview-img"
+      );
+      const downloadA = document.querySelector(
+        "#" + TOOLBAR_ID + " .cosmoware-btn-download"
+      );
+
+      try {
+        statusEl && (statusEl.textContent = "— coletando dados…");
+        const items = extractVolunteers();
+        ns(`extraídos ${items.length} voluntários (página atual da grade).`);
+
+        statusEl && (statusEl.textContent = "— gerando PlantUML…");
+        const uml = buildPlantUml(items);
+
+        // Logar UML para inspeção
+        ns("=== PlantUML WBS gerado ===\n" + uml + "\n=== fim PlantUML ===");
+
+        statusEl && (statusEl.textContent = "— solicitando PNG ao Kroki…");
+        const pngData = await krokiPlantUmlToPng?.(uml);
+        ns("PNG recebido do Kroki.");
+
+        let blob;
+        if (pngData instanceof Blob) {
+          blob = pngData;
+        } else if (
+          pngData instanceof ArrayBuffer ||
+          ArrayBuffer.isView?.(pngData)
+        ) {
+          const ab = pngData instanceof ArrayBuffer ? pngData : pngData.buffer;
+          blob = new Blob([ab], { type: "image/png" });
+        } else if (typeof pngData === "string") {
+          if (pngData.startsWith("data:image/png")) {
+            const b64 = pngData.split(",")[1];
+            const bin = atob(b64);
+            const u8 = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+            blob = new Blob([u8], { type: "image/png" });
+          } else {
+            // Caso Kroki retorne URL/dataURI já pronto
+            previewImg && (previewImg.src = pngData);
+          }
+        }
+
+        let url;
+        if (blob) {
+          url = URL.createObjectURL(blob);
+          previewImg && (previewImg.src = url);
+        }
+
+        const fname = `ICNET-voluntarios-${
+          timeStampCompact?.() || Date.now()
+        }.png`;
+
+        if (downloadA) {
+          if (url) downloadA.href = url;
+          downloadA.setAttribute("download", fname);
+        }
+
+        statusEl && (statusEl.textContent = "— pronto ✓");
+        ns("organograma renderizado com sucesso.");
+      } catch (e) {
+        statusEl && (statusEl.textContent = "— erro");
+        err("falha ao renderizar organograma:", e);
+      }
+    }
+  } catch (e) {
+    err("erro inesperado no init:", e);
   }
-
-  // Observa mutações da página (SPA/iframe) para tentar casar a rota
-  const detach = attachSimpleObserver(tryRoute, context.doc);
-
-  // Primeira tentativa imediata
-  tryRoute();
-
-  // Cleanup automático quando necessário? (opcional)
-  // window.addEventListener("beforeunload", detach);
 }
 </file>
 
@@ -753,56 +883,6 @@ build/
 # SO / logs
 .DS_Store
 *.log
-</file>
-
-<file path=".repomixrc.json">
-{
-  "$schema": "https://repomix.com/schema.json",
-  "output": {
-    "file": "REPOMIX.md",
-    "includeTimestamps": true,
-    "title": "CosmoWare — Repository Context"
-  },
-  "include": [
-    "manifest.json",
-    "core/**/*",
-    "domains/**/*",
-    "templates/**/*",
-    "README.md",
-    "ARCHITECTURE.md",
-    "DEVELOPMENT.md",
-    "CONTRIBUTING.md",
-    "AI_GUIDE.md",
-    "SECURITY.md",
-    "CODE_OF_CONDUCT.md",
-    ".github/ISSUE_TEMPLATE/**/*",
-    ".github/PULL_REQUEST_TEMPLATE.md"
-  ],
-  "exclude": [
-    "node_modules/**/*",
-    ".git/**/*",
-    "**/*.png",
-    "**/*.jpg",
-    "**/*.jpeg",
-    "**/*.gif",
-    "**/*.webp",
-    "**/*.zip",
-    "**/*.min.*",
-    "**/dist/**/*",
-    "**/build/**/*",
-    "**/.DS_Store",
-    "**/*.log"
-  ],
-  "truncate": {
-    "maxFileSizeKB": 256,
-    "strategy": "tail"
-  },
-  "decorators": {
-    "showFileHeader": true,
-    "showTOC": true,
-    "codeFence": true
-  }
-}
 </file>
 
 <file path="ARCHITECTURE.md">
@@ -966,170 +1046,196 @@ Fluxo de contribuição e boas práticas.
 Guia técnico para rodar e desenvolver o CosmoWare.
 </file>
 
-<file path="manifest.json">
-{
-  "manifest_version": 3,
-  "name": "Conscienciologia Tools",
-  "version": "0.4.0",
-  "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
-  "permissions": ["scripting", "activeTab"],
-  "host_permissions": [
-    "https://*.conscienciologia.org.br/*",
-    "https://kroki.io/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["https://*.conscienciologia.org.br/*"],
-      "js": ["core/content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "core/utils.js",
-        "domains/*/main.js",
-        "domains/*/*.js",
-        "domains/*/**/*.js",
-        "domains/*/**/**/*.js"
-      ],
-      "matches": ["https://*.conscienciologia.org.br/*"]
-    }
-  ]
-}
-</file>
-
-<file path="package.json">
-{
-  "scripts": {
-    "repomix": "repomix --output REPOMIX.md"
-  },
-  "devDependencies": {
-  }
-}
-</file>
-
 <file path="SECURITY.md">
 # SECURITY
 
 Políticas de segurança e privacidade.
 </file>
 
-<file path=".github/workflows/release.yml">
-name: Release
+<file path=".github/workflows/repomix.yml">
+name: RepoMix
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
 
-permissions:
-  contents: write  # criar tags, commits e releases
-
 jobs:
-  release:
+  build-repomix:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # precisamos do histórico para tag/changelog
+          fetch-depth: 0
 
-      - name: Compute date-based version (YY.MM.DD.<ms>)
-        id: ver
-        shell: bash
-        run: |
-          DATE=$(date -u +'%y.%m.%d')
-          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
-          VERSION="${DATE}.${TS}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Computed version: ${VERSION}"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: Update manifest.json (if present)
-        shell: bash
+      - name: Generate RepoMix
         run: |
-          if [ -f manifest.json ]; then
-            echo "Updating manifest.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-          else
-            echo "manifest.json not found. Skipping."
-          fi
+          npx --yes repomix --output REPOMIX.md
 
-      - name: Update package.json (if present)
-        shell: bash
+      - name: Commit & Push RepoMix output
         run: |
-          if [ -f package.json ]; then
-            echo "Updating package.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
-          else
-            echo "package.json not found. Skipping."
-          fi
-
-      - name: Commit version bumps (if any)
-        shell: bash
-        run: |
-          if ! git diff --quiet; then
+          if [[ -n "$(git status --porcelain)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(release): v${{ steps.ver.outputs.version }}"
+            git add REPOMIX.md
+            git commit -m "chore(repomix): update REPOMIX.md"
+            git push
           else
-            echo "No file changes to commit."
+            echo "No changes to commit."
           fi
+</file>
 
-      - name: Create tag
-        shell: bash
-        run: |
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin "v${{ steps.ver.outputs.version }}" || {
-            echo "Tag push failed (maybe tag exists)."
-          }
+<file path="domains/icnet/main.js">
+/*****************************************************
+ * domains/icnet/main.js – Router do domínio ICNET
+ * Decide qual módulo de tela carregar (por breadcrumb/URL)
+ * Logs: [ICNET/MAIN]
+ *****************************************************/
+export async function init(context) {
+  const { utils } = context;
+  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils;
+  const { log, warn } = nsLogger("[ICNET/MAIN]");
 
-      - name: Generate changelog since last tag
-        id: changelog
-        shell: bash
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            echo "Last tag: $LAST_TAG"
-            echo "## Changes since $LAST_TAG" > body.md
-            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
-          else
-            echo "No previous tag. Listing all commits."
-            echo "## Initial Release Notes" > body.md
-            git log --pretty=format:'- %s (%h)' >> body.md
-          fi
-          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+  if (window.__ct_icnet_main_loaded) return;
+  window.__ct_icnet_main_loaded = true;
 
-      - name: Update CHANGELOG.md
-        shell: bash
-        run: |
-          VERSION="v${{ steps.ver.outputs.version }}"
-          DATE=$(date -u +'%Y-%m-%d')
-          echo "### ${VERSION} - ${DATE}" > tmp.md
-          cat body.md >> tmp.md
-          echo "" >> tmp.md
-          if [ -f CHANGELOG.md ]; then
-            cat CHANGELOG.md >> tmp.md
-          fi
-          mv tmp.md CHANGELOG.md
-          if ! git diff --quiet; then
-            git add CHANGELOG.md
-            git commit -m "docs(changelog): update for ${VERSION}"
-          else
-            echo "No changes to CHANGELOG.md."
-          fi
+  // Rotas do domínio icnet
+  // match(ctx) → boolean, loader() → Promise<module>
+  const routes = [
+    {
+      name: "administrador/configuracao-ic/organograma",
+      match: (ctx) => {
+        const { norm } = readBreadcrumb(ctx.doc);
+        const alvo = normalizeText("Administrador » Configuração IC » Organograma");
+        // Heurística adicional (opcional): f=1028 no URL
+        const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href);
+        return norm.includes(alvo) || hintUrl;
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/administrador/configuracao-ic/organograma.js"
+        ))
+    },
+    {
+    // Pessoa Física » Voluntário — Organograma de Voluntários
+    name: "pessoa-fisica/voluntario/organograma-voluntarios",
+    match: (ctx) => {
+        try {
+        // readBreadcrumb retorna objeto { raw, norm, ... } no seu router
+        const { norm } = readBreadcrumb(ctx.doc);
+        const alvo = normalizeText("Pessoa Física » Voluntário");
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ steps.ver.outputs.version }}"
-          name: "v${{ steps.ver.outputs.version }}"
-          body_path: "${{ steps.changelog.outputs.body_path }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        // Heurística adicional: rota também casa por ?f=29
+        const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href);
+
+        // Mais tolerante: 'includes' em vez de igualdade estrita
+        return (norm && norm.includes(alvo)) || hintUrl;
+        } catch {
+        return false;
+        }
+    },
+    loader: () =>
+        import(
+        chrome.runtime.getURL(
+            "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
+        )
+        )
+    }
+
+
+    // Adicione novas rotas aqui no futuro
+  ];
+
+  let bootedOnce = false;
+
+  async function tryRoute() {
+    if (bootedOnce) return;
+    const route = routes.find(r => {
+      try { return r.match(context); } catch { return false; }
+    });
+    if (!route) return;
+
+    log("Rota detectada:", route.name);
+    try {
+      const mod = await route.loader();
+      if (typeof mod?.init !== "function") {
+        warn(`Módulo ${route.name} não exporta init()`);
+        return;
+      }
+      await mod.init({ ...context, utils });
+      bootedOnce = true;
+      log(`Módulo ${route.name} inicializado.`);
+    } catch (e) {
+      console.error("[ICNET/MAIN]", "Falha ao carregar módulo:", route.name, e);
+    }
+  }
+
+  // Observa mutações da página (SPA/iframe) para tentar casar a rota
+  const detach = attachSimpleObserver(tryRoute, context.doc);
+
+  // Primeira tentativa imediata
+  tryRoute();
+
+  // Cleanup automático quando necessário? (opcional)
+  // window.addEventListener("beforeunload", detach);
+}
+</file>
+
+<file path=".repomixrc.json">
+{
+  "$schema": "https://repomix.com/schema.json",
+  "output": {
+    "file": "REPOMIX.md",
+    "includeTimestamps": true,
+    "title": "CosmoWare — Repository Context"
+  },
+  "include": [
+    "manifest.json",
+    "core/**/*",
+    "domains/**/*",
+    "templates/**/*",
+    "README.md",
+    "ARCHITECTURE.md",
+    "DEVELOPMENT.md",
+    "CONTRIBUTING.md",
+    "AI_GUIDE.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    ".github/ISSUE_TEMPLATE/**/*",
+    ".github/PULL_REQUEST_TEMPLATE.md"
+  ],
+  "exclude": [
+    "node_modules/**/*",
+    ".git/**/*",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp",
+    "**/*.zip",
+    "**/*.min.*",
+    "**/dist/**/*",
+    "**/build/**/*",
+    "**/.DS_Store",
+    "**/*.log"
+  ],
+  "truncate": {
+    "maxFileSizeKB": 256,
+    "strategy": "tail"
+  },
+  "decorators": {
+    "showFileHeader": true,
+    "showTOC": true,
+    "codeFence": true
+  }
+}
 </file>
 
 <file path="AI_GUIDE.md">
@@ -1371,6 +1477,166 @@ Gere changelog curto no formato semântico (feat, fix, chore).
 - `core/utils.js`  
 
 > Estes arquivos estão sempre no `REPOMIX.md` e servem como exemplos.
+</file>
+
+<file path="manifest.json">
+{
+  "manifest_version": 3,
+  "name": "Conscienciologia Tools",
+  "version": "0.4.0",
+  "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": [
+    "https://*.conscienciologia.org.br/*",
+    "https://kroki.io/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.conscienciologia.org.br/*"],
+      "js": ["core/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "core/utils.js",
+        "domains/*/main.js",
+        "domains/*/*.js",
+        "domains/*/**/*.js",
+        "domains/*/**/**/*.js"
+      ],
+      "matches": ["https://*.conscienciologia.org.br/*"]
+    }
+  ]
+}
+</file>
+
+<file path="package.json">
+{
+  "scripts": {
+    "repomix": "repomix --output REPOMIX.md"
+  },
+  "devDependencies": {
+  }
+}
+</file>
+
+<file path=".github/workflows/release.yml">
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # criar tags, commits e releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # precisamos do histórico para tag/changelog
+
+      - name: Compute date-based version (YY.MM.DD.<ms>)
+        id: ver
+        shell: bash
+        run: |
+          DATE=$(date -u +'%y.%m.%d')
+          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
+          VERSION="${DATE}.${TS}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
+
+      - name: Update manifest.json (if present)
+        shell: bash
+        run: |
+          if [ -f manifest.json ]; then
+            echo "Updating manifest.json to version ${{ steps.ver.outputs.version }}"
+            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+          else
+            echo "manifest.json not found. Skipping."
+          fi
+
+      - name: Update package.json (if present)
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "Updating package.json to version ${{ steps.ver.outputs.version }}"
+            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
+          else
+            echo "package.json not found. Skipping."
+          fi
+
+      - name: Commit version bumps (if any)
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(release): v${{ steps.ver.outputs.version }}"
+          else
+            echo "No file changes to commit."
+          fi
+
+      - name: Create tag
+        shell: bash
+        run: |
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin "v${{ steps.ver.outputs.version }}" || {
+            echo "Tag push failed (maybe tag exists)."
+          }
+
+      - name: Generate changelog since last tag
+        id: changelog
+        shell: bash
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            echo "Last tag: $LAST_TAG"
+            echo "## Changes since $LAST_TAG" > body.md
+            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
+          else
+            echo "No previous tag. Listing all commits."
+            echo "## Initial Release Notes" > body.md
+            git log --pretty=format:'- %s (%h)' >> body.md
+          fi
+          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        shell: bash
+        run: |
+          VERSION="v${{ steps.ver.outputs.version }}"
+          DATE=$(date -u +'%Y-%m-%d')
+          echo "### ${VERSION} - ${DATE}" > tmp.md
+          cat body.md >> tmp.md
+          echo "" >> tmp.md
+          if [ -f CHANGELOG.md ]; then
+            cat CHANGELOG.md >> tmp.md
+          fi
+          mv tmp.md CHANGELOG.md
+          if ! git diff --quiet; then
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): update for ${VERSION}"
+          else
+            echo "No changes to CHANGELOG.md."
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.ver.outputs.version }}"
+          name: "v${{ steps.ver.outputs.version }}"
+          body_path: "${{ steps.changelog.outputs.body_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
 <file path="README.md">
