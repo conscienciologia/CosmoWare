@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "repomix": "repomix --output REPOMIX.md"
+  },
+  "devDependencies": {
+  }
+}

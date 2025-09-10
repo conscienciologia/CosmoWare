@@ -1,0 +1,19 @@
+# diretórios
+.git/
+node_modules/
+dist/
+build/
+
+# binários/artefatos
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.zip
+*.pdf
+*.min.*
+
+# SO / logs
+.DS_Store
+*.log
