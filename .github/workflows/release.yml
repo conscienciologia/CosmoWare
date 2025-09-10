@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # necessário para criar tags e releases
+  contents: write  # criar tags, commits e releases
 
 jobs:
   release:
@@ -16,14 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # precisamos do histórico para changelog e last tag
+          fetch-depth: 0  # precisamos do histórico para tag/changelog
 
       - name: Compute date-based version (YY.MM.DD.<ms>)
         id: ver
         shell: bash
         run: |
           DATE=$(date -u +'%y.%m.%d')
-          TS=$(date -u +%s%3N)   # timestamp em milissegundos UTC
+          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
           VERSION="${DATE}.${TS}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Computed version: ${VERSION}"
@@ -83,6 +83,25 @@ jobs:
             git log --pretty=format:'- %s (%h)' >> body.md
           fi
           echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        shell: bash
+        run: |
+          VERSION="v${{ steps.ver.outputs.version }}"
+          DATE=$(date -u +'%Y-%m-%d')
+          echo "### ${VERSION} - ${DATE}" > tmp.md
+          cat body.md >> tmp.md
+          echo "" >> tmp.md
+          if [ -f CHANGELOG.md ]; then
+            cat CHANGELOG.md >> tmp.md
+          fi
+          mv tmp.md CHANGELOG.md
+          if ! git diff --quiet; then
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): update for ${VERSION}"
+          else
+            echo "No changes to CHANGELOG.md."
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
