@@ -27,7 +27,34 @@ export async function init(context) {
         import(chrome.runtime.getURL(
           "domains/icnet/administrador/configuracao-ic/organograma.js"
         ))
+    },
+    {
+    // Pessoa Física » Voluntário — Organograma de Voluntários
+    name: "pessoa-fisica/voluntario/organograma-voluntarios",
+    match: (ctx) => {
+        try {
+        // readBreadcrumb retorna objeto { raw, norm, ... } no seu router
+        const { norm } = readBreadcrumb(ctx.doc);
+        const alvo = normalizeText("Pessoa Física » Voluntário");
+
+        // Heurística adicional: rota também casa por ?f=29
+        const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href);
+
+        // Mais tolerante: 'includes' em vez de igualdade estrita
+        return (norm && norm.includes(alvo)) || hintUrl;
+        } catch {
+        return false;
+        }
+    },
+    loader: () =>
+        import(
+        chrome.runtime.getURL(
+            "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
+        )
+        )
     }
+
+
     // Adicione novas rotas aqui no futuro
   ];
 
