@@ -58,6 +58,7 @@ domains/
     main.js
 templates/
   module-template.js
+.gitattributes
 .repomixignore
 .repomixrc.json
 AI_GUIDE.md
@@ -714,6 +715,24 @@ export async function init(context) {
 export async function init(ctx) { console.log('Template de módulo CosmoWare'); }
 </file>
 
+<file path=".gitattributes">
+# Use line endings do sistema operacional local
+* text=auto
+
+# Scripts shell sempre LF
+*.sh text eol=lf
+
+# Batch/PowerShell sempre CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# JSON, YAML, MD, etc. forçar LF (para CI/CD não quebrar)
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+</file>
+
 <file path=".repomixignore">
 # diretórios
 .git/
@@ -995,6 +1014,122 @@ Guia técnico para rodar e desenvolver o CosmoWare.
 # SECURITY
 
 Políticas de segurança e privacidade.
+</file>
+
+<file path=".github/workflows/release.yml">
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # criar tags, commits e releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # precisamos do histórico para tag/changelog
+
+      - name: Compute date-based version (YY.MM.DD.<ms>)
+        id: ver
+        shell: bash
+        run: |
+          DATE=$(date -u +'%y.%m.%d')
+          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
+          VERSION="${DATE}.${TS}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
+
+      - name: Update manifest.json (if present)
+        shell: bash
+        run: |
+          if [ -f manifest.json ]; then
+            echo "Updating manifest.json to version ${{ steps.ver.outputs.version }}"
+            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+          else
+            echo "manifest.json not found. Skipping."
+          fi
+
+      - name: Update package.json (if present)
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "Updating package.json to version ${{ steps.ver.outputs.version }}"
+            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
+          else
+            echo "package.json not found. Skipping."
+          fi
+
+      - name: Commit version bumps (if any)
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(release): v${{ steps.ver.outputs.version }}"
+          else
+            echo "No file changes to commit."
+          fi
+
+      - name: Create tag
+        shell: bash
+        run: |
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin "v${{ steps.ver.outputs.version }}" || {
+            echo "Tag push failed (maybe tag exists)."
+          }
+
+      - name: Generate changelog since last tag
+        id: changelog
+        shell: bash
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            echo "Last tag: $LAST_TAG"
+            echo "## Changes since $LAST_TAG" > body.md
+            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
+          else
+            echo "No previous tag. Listing all commits."
+            echo "## Initial Release Notes" > body.md
+            git log --pretty=format:'- %s (%h)' >> body.md
+          fi
+          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        shell: bash
+        run: |
+          VERSION="v${{ steps.ver.outputs.version }}"
+          DATE=$(date -u +'%Y-%m-%d')
+          echo "### ${VERSION} - ${DATE}" > tmp.md
+          cat body.md >> tmp.md
+          echo "" >> tmp.md
+          if [ -f CHANGELOG.md ]; then
+            cat CHANGELOG.md >> tmp.md
+          fi
+          mv tmp.md CHANGELOG.md
+          if ! git diff --quiet; then
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): update for ${VERSION}"
+          else
+            echo "No changes to CHANGELOG.md."
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.ver.outputs.version }}"
+          name: "v${{ steps.ver.outputs.version }}"
+          body_path: "${{ steps.changelog.outputs.body_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
 <file path="AI_GUIDE.md">
