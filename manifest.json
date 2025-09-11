@@ -1,17 +1,24 @@
 {
   "manifest_version": 3,
   "name": "Conscienciologia Tools",
-  "version": "0.4.0",
+  "version": "25.09.11.1757552140829",
   "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
-  "permissions": ["scripting", "activeTab"],
+  "permissions": [
+    "scripting",
+    "activeTab"
+  ],
   "host_permissions": [
     "https://*.conscienciologia.org.br/*",
     "https://kroki.io/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.conscienciologia.org.br/*"],
-      "js": ["core/content.js"],
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ],
+      "js": [
+        "core/content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
@@ -25,7 +32,9 @@
         "domains/*/**/*.js",
         "domains/*/**/**/*.js"
       ],
-      "matches": ["https://*.conscienciologia.org.br/*"]
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ]
     }
   ]
 }
