@@ -39,10 +39,7 @@ Gera automaticamente um organograma a partir dos dados da tela administrativa, c
 
 ## 🔧 Instalação (modo desenvolvedor)
 
-1. Clone o repositório:  
-   ```bash
-   git clone https://github.com/conscienciologia/CosmoWare
-   ```
+1. Baixe o [código fonte zip](https://github.com/conscienciologia/CosmoWare/releases/latest/) 
 2. No Chrome/Brave, abra: `chrome://extensions`
 3. Ative **Developer mode / Modo desenvolvedor**
 4. Clique em **Load unpacked / Carregar sem empacotar**
