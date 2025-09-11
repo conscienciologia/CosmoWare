@@ -16,14 +16,24 @@ Cada funcionalidade busca diminuir atritos, automatizar tarefas repetitivas e pr
 
 ---
 
-## 🚀 Funcionalidades atuais
+## 🚀 Funcionalidades
 
-- **Organograma (ICNet)**  
-  - Extrai dados da tela `Administrador » Configuração IC » Organograma`  
-  - Gera automaticamente um **diagrama em imagem** (PlantUML via Kroki)  
-  - Permite **baixar o PNG** nomeado com IC e data/hora  
+### ICNet — Pessoa Física » Voluntário — **WBS do Voluntariado**
+Gera um **diagrama WBS (Work Breakdown Structure)** em imagem a partir da tabela de voluntários.
 
-Novas funcionalidades serão adicionadas de forma incremental, sempre de forma **modular**.
+- ✅ **Toolbar discreta** antes da tabela com:
+  - **🖼️ Gerar Imagem** (único gatilho de geração)
+  - **Formato: PNG / SVG** (persistente via `localStorage`)
+  - **Baixar imagem** (habilitado após a geração)
+
+![](doc\feature-pessoa-fisica-voluntario.png)
+
+---
+
+### ICNet — Configuração IC » Organograma (clássico)
+Gera automaticamente um organograma a partir dos dados da tela administrativa, com **download de PNG** nomeado com IC e data/hora.  
+
+![](doc\feature-configuracoes-ic-organograma-voluntario.png)
 
 ---
 
@@ -42,20 +52,30 @@ Pronto ✅ A extensão será carregada e atuará **somente nas telas suportadas*
 
 ---
 
-## 🖥️ Como usar
+## 🖥️ Como usar (Pessoa Física » Voluntário)
 
-- Acesse normalmente os sistemas (ex.: ICNet)  
-- Quando entrar em uma tela suportada, a CosmoWare injeta uma **toolbar discreta** com ações úteis  
-- Os **logs** no console do navegador confirmam a ativação  
+1. Abra a tela **Pessoa Física » Voluntário** no ICNet.  
+2. Na toolbar inserida pela extensão, clique em **🖼️ Gerar Imagem**.  
+3. (Opcional) Escolha o **formato** (PNG/SVG). O formato escolhido é **lembrado** entre páginas.  
+4. Após a renderização, use **Baixar imagem** para salvar o arquivo.  
 
 > Nas telas não reconhecidas, a extensão **não interfere**.
 
 ---
 
+## 🩺 Solução de problemas
+
+- **Botões não aparecem**: confirme se o breadcrumb é exatamente **Pessoa Física » Voluntário**.  
+- **Sem preview/erro de rede**: verifique conexão com `https://kroki.io/` (bloqueadores podem impedir).  
+- **SVG não baixa**: assegure que o navegador permita baixar **Blob URLs**; tente PNG como alternativa.  
+- **Dados diferentes após paginação**: esta feature só gera a imagem quando você clicar em **Gerar Imagem** (não gera automaticamente).
+
+---
+
 ## 🔒 Privacidade
 
-- Lemos apenas o conteúdo da **página atual**, sem capturar dados pessoais.  
-- Para renderizar organogramas, usamos **Kroki.io** (somente o texto do diagrama é enviado).  
+- Lemos apenas o conteúdo da **página atual**, sem capturar dados pessoais para fora do navegador.  
+- Para renderizar diagramas, usamos **Kroki.io**: enviamos **apenas o texto do PlantUML** necessário.  
 - Detalhes em [`SECURITY.md`](./SECURITY.md).  
 
 ---

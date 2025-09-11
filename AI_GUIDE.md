@@ -47,32 +47,32 @@ Assim a IA entende o **contexto global** (arquitetura e convenções) e também 
 
 ## Domínio e Tela
 - Domínio: icnet.conscienciologia.org.br
-- Breadcrumb (normalizado): administrador » configuração ic » organograma
-- URL(s) típica(s): https://icnet.conscienciologia.org.br/main.aspx#, /verpon/app/grid.aspx?f=1028
+- Breadcrumb (não normalizado): Pessoa Física » Voluntário
+- URL(s) típica(s): https://icnet.conscienciologia.org.br/main.aspx#
 
 ## Objetivo
-Ex.: Extrair tabela do organograma e gerar imagem (PlantUML via Kroki) com toolbar (Atualizar / Baixar PNG).
+Ex.: Extrair tabela de voluntários e gerar WBS PlantUML via Kroki com toolbar (Gerar Imagem / Formato / Baixar).
 
 ## Entradas da página (amostra real de HTML)
-Cole aqui trechos relevantes:
+Cole trechos relevantes:
 - Breadcrumb (#TbPathAndNavigation #lbPath)
 - Tabela (#Grid1)
 - Exemplo de linhas relevantes
 
 ## Resultado Esperado
-- Toolbar discreta antes da tabela com botões X, Y…
-- Geração de imagem PNG e link de download
-- Nome do arquivo: <IC>-<timestamp>.png
+- Toolbar discreta antes da tabela com botões: Gerar Imagem, Formato (PNG|SVG), Baixar
+- Geração de imagem e link de download
+- Nome do arquivo: <IC>-voluntarios-<timestamp>.png|svg
 
 ## Critérios de Aceitação
-- Só atua quando breadcrumb = “administrador » configuração ic » organograma”
+- Só atua quando breadcrumb = “Pessoa Física » Voluntário”
 - Não duplica UI (idempotência)
-- Logs com prefixo [ICNET/ORG]
+- Logs com prefixo [ICNET/PF-VOL]
 - Erros tratados no console de forma clara
 - Compatível com iframes
 
 ## Observações
-- Usar ctx.utils (nsLogger, readBreadcrumb, krokiPlantUmlToPng, timeStampCompact, attachSimpleObserver)
+- Usar ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact)
 - IDs/Classes com prefixo cosmoware-
 ```
 
@@ -88,20 +88,12 @@ e siga estes requisitos:
 
 - Estrutura: domains/<subdomínio>/<rota>/<nome>.js
 - Independente (não importa outra feature)
-- Use apenas ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, timeStampCompact)
+- Use apenas ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact)
 - Valide breadcrumb antes de atuar
 - Idempotência (não duplicar UI)
 - Logs com namespace fixo (ex.: [ICNET/ORG])
 - IDs/classes com prefixo cosmoware-
-- Comente trechos críticos
-
-### Brief
-[COLE AQUI O BRIEF]
-
-### Entregue:
-1) Código completo do módulo
-2) Lista de seletores utilizados e justificativa
-3) Logs esperados no console
+- Comente trechos críticos (por que do observer, throttling, etc.)
 ```
 
 ---
@@ -109,86 +101,178 @@ e siga estes requisitos:
 ## 5) Prompt Base — Registro no Router
 
 ```
-Gere o snippet para registrar a rota no arquivo domains/<subdomínio>/main.js, 
+Gere o snippet para registrar a rota no arquivo domains/<subdomínio>/main.js,
 seguindo o padrão do projeto:
 
 - `name`: caminho legível da tela
-- `match(ctx)`: verificação do breadcrumb
+- `match(ctx)`: verificação do breadcrumb (use normalizeText só para comparar)
 - `loader()`: import dinâmico via chrome.runtime.getURL
 
 Além do snippet, diga onde colar e gere checklist de testes manuais.  
-Breadcrumb alvo: "administrador » configuração ic » organograma".
+Breadcrumb alvo: "Pessoa Física » Voluntário".
 ```
 
 ---
 
-## 6) Prompts de Refino
+## 6) **Erros comuns e como evitar** (lições aprendidas)
 
-### Seletores/breadcrumb não batem
-```
-Os seletores ou breadcrumb não estão casando. 
-Aqui estão os logs e HTML coletado:
+### 6.1 nsLogger — API correta
+- **Certo**:  
+  ```js
+  const { log, warn, error } = nsLogger("[ICNET/PF-VOL]");
+  log("mensagem");
+  ```
+- **Errado**: tratar o retorno como função única (`ns("...")`).  
+- Sempre padronize o namespace entre colchetes, ex.: `[ICNET/PF-VOL]`.
 
-[cole logs/HTML]
+### 6.2 normalizeText — quando usar
+- Use **somente** para **comparações** (ex.: breadcrumb).  
+- **Nunca** normalize textos de **exibição** (nomes, rótulos) — preserve capitalização original.  
+- Garanta que a entrada de `normalizeText` seja **string**.
 
-Por favor:
-- Ajuste seletores para iframes
-- Garanta idempotência
-- Liste logs esperados
-```
+### 6.3 readBreadcrumb — alvo exato
+- Compare com a **string normalizada exata** do alvo.  
+  ```js
+  const alvo = normalizeText("Pessoa Física » Voluntário");
+  const ok = readBreadcrumb(document).norm === alvo;
+  ```
 
-### UI duplicada
-```
-A UI está sendo inserida mais de uma vez. 
-Revise o módulo para idempotência com flag global e uso correto de observer.
-```
+### 6.4 attachSimpleObserver — assinatura e loops
+- Assinatura: `attachSimpleObserver(callback, nodeOuDocument)`.  
+- **Evite loops**: o observer não deve disparar **geraçōes caras** (ex.: chamar Kroki) automaticamente.  
+  - Preferir: marcar “sujo” ou **não gerar nada** — gerar **apenas** com ação explícita do usuário (botão).
 
-### Logs confusos
-```
-Padronize logs com nsLogger e namespace fixo.  
-Mostre timeline de eventos esperada.
-```
+### 6.5 Idempotência de UI
+- Antes de inserir toolbar/preview, **verifique** por `#cosmoware-...`.  
+- Nunca re-anexar listeners se o elemento já existe.
+
+### 6.6 PlantUML WBS — estilo e estereótipos
+- **Estilo correto** (WBS usa classes dentro de `wbsDiagram`):
+  ```plantuml
+  <style>
+  wbsDiagram {
+    .ativo   { BackgroundColor PaleGreen }
+    .inativo { BackgroundColor LightGray }
+  }
+  </style>
+  ```
+- Use estereótipo nos nós: `<<ativo>>` / `<<inativo>>`.  
+- **Não** use `.stereotype("...")` no WBS.
+
+### 6.7 Raiz condicional “Voluntários”
+- Se houver **apenas um** nível raiz (ex.: “Colegiado Administrativo”), **omite** “Voluntários” e use esse nível como `*`.  
+- Se houver **mais de um** topo, inclua “* Voluntários”.
+
+### 6.8 Capitalização
+- Preserve os textos do DOM como vieram para labels do diagrama.  
+- Para ordenar, você pode usar `localeCompare`, mas **não** altere o case exibido.
+
+### 6.9 Geração sob demanda (UX)
+- **Não** gere a imagem ao carregar a página nem ao detectar mutações.  
+- Use **um botão único**: “🖼️ Gerar Imagem”.  
+- Depois de gerar, habilite “Baixar imagem”.
+
+### 6.10 Persistência de preferências (localStorage)
+- Chave **versionada**: `cosmoware_pfvol_prefs_v1`.  
+- Estrutura mínima: `{ fmt: "png" | "svg" }`.  
+- Mescle com defaults ao carregar (`{ ...base, ...parsed }`).
+
+### 6.11 Funções utilitárias — existência e fallback
+- Antes de usar um util, verifique se existe:
+  ```js
+  if (typeof krokiPlantUmlToSvg === "function") { ... } else { /* fallback */ }
+  ```
+- SVG indisponível → **fallback para PNG**, com `warn`.
+
+### 6.12 Download e preview
+- Habilite download **após** gerar: defina `href` e `download`.  
+- Trate `Blob`, `ArrayBuffer` e **data URI**.  
+- Se recriar URLs, considere `URL.revokeObjectURL` do anterior.
+
+### 6.13 Segurança e privacidade
+- Não logue dados pessoais sensíveis.  
+- Os diagramas enviados ao Kroki devem conter **apenas** o texto necessário.
 
 ---
 
-## 7) Checklist de Aceitação
+## 7) Snippet de toolbar (alinhado à esquerda)
 
-- [ ] Atua somente na tela correta  
-- [ ] Não duplica UI  
-- [ ] Logs claros e padronizados  
-- [ ] Usa apenas ctx.utils  
+```js
+// Layout: [🖼️ Gerar Imagem] [Formato: (PNG|SVG)] [Baixar imagem] [status]
+const toolbar = document.createElement("div");
+toolbar.id = "cosmoware-pf-vol-toolbar";
+toolbar.className = "cosmoware-toolbar";
+Object.assign(toolbar.style, {
+  display: "flex",
+  gap: "10px",
+  alignItems: "center",
+  justifyContent: "flex-start",
+  flexWrap: "wrap",
+  margin: "8px 0",
+  padding: "6px 8px",
+  border: "1px solid #ddd",
+  borderRadius: "6px",
+  background: "#fafafa",
+  fontSize: "12px",
+});
+```
+
+- **Botão “Gerar Imagem”** dispara toda a cadeia (coleta → WBS → Kroki → preview → download).  
+- **Select Formato** persiste em `localStorage`.  
+- **“Baixar imagem”** inicia **desabilitado** e só é habilitado após a geração.
+
+---
+
+## 8) Exemplo de WBS correto (com raiz condicional)
+
+```plantuml
+@startwbs
+<style>
+wbsDiagram {
+  .ativo   { BackgroundColor PaleGreen }
+  .inativo { BackgroundColor LightGray }
+}
+</style>
+* Colegiado Administrativo
+** Relações Institucionais
+*** Nome (Função) <<ativo>>
+@endwbs
+```
+
+> Observação: se houver mais de um nível topo, use:
+>
+> ```
+> * Voluntários
+> ** Colegiado Administrativo
+> ** Outro Topo
+> ...
+> ```
+
+---
+
+## 9) Checklist de Aceitação
+
+- [ ] Atua somente na tela correta (breadcrumb igual ao alvo)  
+- [ ] Não duplica UI (idempotência)  
+- [ ] Logs claros e padronizados `[ICNET/... ]`  
+- [ ] Usa apenas `ctx.utils`  
 - [ ] Compatível com iframes  
-- [ ] Arquivo em domains/<domínio>/<rota>/<feature>.js  
-- [ ] Rota registrada em main.js  
-- [ ] Testado manualmente  
+- [ ] Arquivo em `domains/<domínio>/<rota>/<feature>.js`  
+- [ ] Rota registrada em `domains/<domínio>/main.js`  
+- [ ] Geração **apenas** via botão “Gerar Imagem”  
+- [ ] Formato (PNG/SVG) **persistente** via `localStorage`  
+- [ ] WBS com **estilo correto** e **estereótipos**  
+- [ ] Raiz “Voluntários” **condicional**  
+- [ ] Testado manualmente (preview + download)  
 - [ ] Prompt usado documentado no PR  
 
 ---
 
-## 8) Dicas de HTML no Prompt
+## 10) Dicas de HTML no Prompt
 
-- Copie trechos reais do DOM (breadcrumb, tabela, botões)  
-- Inclua variações (linhas pares/impares)  
-- Informe se há iframes  
-
----
-
-## 9) Exemplos de Critérios de Aceitação
-
-- “Exibir toolbar com botões antes da tabela #Grid1”  
-- “Gerar PNG via Kroki”  
-- “Nome do arquivo <IC>-<timestamp>.png”  
-- “Log final: Organograma renderizado com sucesso. Nós: N”  
-- “Nunca renderizar fora do breadcrumb alvo”  
-
----
-
-## 10) Automação com RepoMix
-
-- O `REPOMIX.md` é atualizado automaticamente no GitHub Actions.  
-- Sempre inicie a geração com IA usando o `REPOMIX.md` **+ Brief**.  
-- Se o arquivo for grande demais, use apenas trechos essenciais.  
-- Reexecute IA após atualizações no repositório para manter consistência.  
+- Copie trechos reais do DOM (breadcrumb, tabela, botões).  
+- Inclua variações (linhas pares/ímpares).  
+- Informe se há iframes.  
 
 ---
 
@@ -213,7 +297,6 @@ Gere descrição de PR no padrão CosmoWare:
 - Logs esperados
 - Checklist
 ```
-
 **Changelog curto**
 ```
 Gere changelog curto no formato semântico (feat, fix, chore).
@@ -223,7 +306,7 @@ Gere changelog curto no formato semântico (feat, fix, chore).
 
 ## 12) Segurança
 
-- Nunca logar dados pessoais  
+- Nunca logar dados pessoais sensíveis  
 - Usar Kroki apenas para texto de diagrama  
 - Se houver dados sensíveis → mascarar/remover e documentar no PR  
 
@@ -231,7 +314,7 @@ Gere changelog curto no formato semântico (feat, fix, chore).
 
 ## 13) Exemplos no Repositório
 
-- `domains/icnet/administrador/configuracao-ic/organograma.js`  
+- `domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js`  
 - `domains/icnet/main.js`  
 - `core/utils.js`  
 
