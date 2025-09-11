@@ -1801,14 +1801,14 @@ Gera um **diagrama WBS (Work Breakdown Structure)** em imagem a partir da tabela
   - **Formato: PNG / SVG** (persistente via `localStorage`)
   - **Baixar imagem** (habilitado após a geração)
 
-![](doc\feature-pessoa-fisica-voluntario.png)
+![](doc/feature-pessoa-fisica-voluntario.png)
 
 ---
 
 ### ICNet — Configuração IC » Organograma (clássico)
 Gera automaticamente um organograma a partir dos dados da tela administrativa, com **download de PNG** nomeado com IC e data/hora.  
 
-![](doc\feature-configuracoes-ic-organograma-voluntario.png)
+![](doc/feature-configuracoes-ic-organograma-voluntario.png)
 
 ---
 
