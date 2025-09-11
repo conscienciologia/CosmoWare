@@ -41,6 +41,17 @@ export async function krokiPlantUmlToPng(umlText) {
   return res.blob();
 }
 
+/** POST para kroki.io -> SVG (Blob) */
+export async function krokiPlantUmlToSvg(umlText) {
+  const res = await fetch("https://kroki.io/plantuml/svg", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: umlText
+  });
+  if (!res.ok) throw new Error(`kroki.io error ${res.status}`);
+  return res.blob(); // image/svg+xml
+}
+
 /** Cria um MutationObserver simples (childList+subtree) e retorna o handler para disconnect */
 export function attachSimpleObserver(cb, doc = document) {
   const mo = new MutationObserver(cb);

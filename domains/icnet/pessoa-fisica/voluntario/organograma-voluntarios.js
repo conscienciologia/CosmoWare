@@ -1,17 +1,20 @@
 // domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js
-// CosmoWare — ICNET | Geração de organograma (PlantUML WBS via Kroki) a partir da tabela de Voluntários
+// CosmoWare — ICNET | WBS de Voluntários (PlantUML via Kroki)
+// Requisitos: usar apenas ctx.utils (nsLogger, normalizeText, readBreadcrumb, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact)
+// Breadcrumb alvo: "Pessoa Física » Voluntário"
+// Idempotência de UI, logs [ICNET/PF-VOL], compatível com iframes, classes/IDs prefixo cosmoware-.
 
 export async function init(ctx) {
   const {
     nsLogger,
     normalizeText,
     readBreadcrumb,
-    attachSimpleObserver,
     krokiPlantUmlToPng,
+    krokiPlantUmlToSvg,
     timeStampCompact,
   } = ctx.utils || {};
 
-  // Logger compatível com main.js
+  // Logger no padrão do main.js
   const { log, warn } = nsLogger?.("[ICNET/PF-VOL]") || {
     log: (...a) => console.log("[ICNET/PF-VOL]", ...a),
     warn: (...a) => console.warn("[ICNET/PF-VOL]", ...a),
@@ -19,28 +22,51 @@ export async function init(ctx) {
   const ns = log;
   const err = (...a) => console.error("[ICNET/PF-VOL]", ...a);
 
+  // =========================
+  // Persistência do formato
+  // =========================
+  const LS_KEY = "cosmoware_pfvol_prefs_v1";
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      const base = { fmt: "png" }; // fmt = png|svg
+      if (!raw) return base;
+      const parsed = JSON.parse(raw);
+      return { ...base, ...parsed };
+    } catch {
+      return { fmt: "png" };
+    }
+  }
+  function savePrefs(prefs) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      warn("falha ao salvar prefs:", e);
+    }
+  }
+  let PREFS = loadPrefs();
+
   try {
     ns("init: módulo carregado");
 
-    // 1) Validação de breadcrumb
+    // 1) Validação de breadcrumb (somente atua nesta tela)
     const bcObj = readBreadcrumb?.(document) || { raw: "", norm: "" };
     const alvo = normalizeText?.("Pessoa Física » Voluntário");
     const bcOk = bcObj.norm === alvo;
-
     ns("breadcrumb:", bcObj.raw, "=> ok?", bcOk);
     if (!bcOk) {
       warn("breadcrumb não confere — abortando.");
       return;
     }
 
-    // 2) Selecionar a tabela alvo (#Grid1)
+    // 2) Seleciona a tabela alvo
     const grid = document.querySelector("#Grid1");
     if (!grid) {
       warn("tabela #Grid1 não encontrada — abortando.");
       return;
     }
 
-    // 3) Toolbar idempotente
+    // 3) Toolbar idempotente (antes da tabela), botões todos à ESQUERDA
     const TOOLBAR_ID = "cosmoware-pf-vol-toolbar";
     let toolbar = document.getElementById(TOOLBAR_ID);
     if (!toolbar) {
@@ -49,7 +75,7 @@ export async function init(ctx) {
       toolbar.className = "cosmoware-toolbar cosmoware-pf-vol-toolbar";
       Object.assign(toolbar.style, {
         display: "flex",
-        gap: "8px",
+        gap: "10px",
         alignItems: "center",
         margin: "8px 0",
         padding: "6px 8px",
@@ -57,36 +83,73 @@ export async function init(ctx) {
         borderRadius: "6px",
         background: "#fafafa",
         fontSize: "12px",
+        justifyContent: "flex-start", // tudo alinhado à esquerda
+        flexWrap: "wrap",
       });
 
-      const btnRefresh = document.createElement("button");
-      btnRefresh.type = "button";
-      btnRefresh.className = "cosmoware-btn cosmoware-btn-refresh";
-      btnRefresh.textContent = "Atualizar";
-      Object.assign(btnRefresh.style, { cursor: "pointer" });
+      // Botão GERAR (único gatilho de geração)
+      const btnGenerate = document.createElement("button");
+      btnGenerate.type = "button";
+      btnGenerate.className = "cosmoware-btn cosmoware-btn-generate";
+      btnGenerate.textContent = "🖼️  Gerar Imagem";
+      Object.assign(btnGenerate.style, {
+        cursor: "pointer",
+        fontWeight: 600,
+      });
 
+      // Label "Formato" + select PNG/SVG (persistente)
+      const labelFmt = document.createElement("label");
+      labelFmt.className = "cosmoware-select-label";
+      Object.assign(labelFmt.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+      });
+
+      const spanFmt = document.createElement("span");
+      spanFmt.textContent = "Formato:";
+
+      const selectFmt = document.createElement("select");
+      selectFmt.id = "cosmoware-select-fmt";
+      ["png", "svg"].forEach((fmt) => {
+        const opt = document.createElement("option");
+        opt.value = fmt;
+        opt.textContent = fmt.toUpperCase();
+        if (fmt === PREFS.fmt) opt.selected = true;
+        selectFmt.appendChild(opt);
+      });
+      selectFmt.addEventListener("change", () => {
+        PREFS.fmt = selectFmt.value;
+        savePrefs(PREFS);
+      });
+
+      labelFmt.appendChild(spanFmt);
+      labelFmt.appendChild(selectFmt);
+
+      // Link de download (inicialmente desabilitado)
       const btnDownload = document.createElement("a");
       btnDownload.className = "cosmoware-btn cosmoware-btn-download";
-      btnDownload.textContent = "Baixar PNG";
+      btnDownload.textContent = "Baixar imagem";
       btnDownload.href = "javascript:void(0)";
-      btnDownload.setAttribute(
-        "download",
-        `ICNET-voluntarios-${timeStampCompact?.() || Date.now()}.png`
-      );
-      Object.assign(btnDownload.style, { cursor: "pointer" });
+      btnDownload.setAttribute("aria-disabled", "true");
+      btnDownload.style.pointerEvents = "none";
+      btnDownload.style.opacity = "0.5";
 
+      // Status discreto
       const status = document.createElement("span");
       status.className = "cosmoware-status";
       status.textContent = "— pronto";
       status.style.opacity = "0.7";
 
-      toolbar.appendChild(btnRefresh);
+      // Ordem: Gerar, Formato, Baixar, Status (todos à esquerda)
+      toolbar.appendChild(btnGenerate);
+      toolbar.appendChild(labelFmt);
       toolbar.appendChild(btnDownload);
       toolbar.appendChild(status);
 
       grid.parentElement?.insertBefore(toolbar, grid);
 
-      // Preview
+      // Área de preview (idempotente)
       const PREVIEW_ID = "cosmoware-pf-vol-preview";
       if (!document.getElementById(PREVIEW_ID)) {
         const preview = document.createElement("div");
@@ -96,7 +159,7 @@ export async function init(ctx) {
 
         const img = document.createElement("img");
         img.className = "cosmoware-preview-img";
-        img.alt = "Organograma (PNG)";
+        img.alt = "Organograma (WBS)";
         Object.assign(img.style, {
           maxWidth: "100%",
           border: "1px solid #eee",
@@ -108,30 +171,17 @@ export async function init(ctx) {
         toolbar.parentElement?.insertBefore(preview, toolbar.nextSibling);
       }
 
-      // Listeners
-      btnRefresh.addEventListener("click", () => {
-        renderFromGrid().catch((e) => err("render manual falhou:", e));
+      // Ação de gerar (único ponto que chama Kroki)
+      btnGenerate.addEventListener("click", () => {
+        generateOnce().catch((e) => err("geração via botão falhou:", e));
       });
-
-      // Observer para mudanças no grid (ex.: paginação ASP.NET)
-      // Importante: attachSimpleObserver(callback, node)
-      attachSimpleObserver?.(() => {
-        clearTimeout(renderFromGrid.__t);
-        renderFromGrid.__t = setTimeout(() => {
-          ns("observer: mudanças detectadas na #Grid1 → atualizando organograma…");
-          renderFromGrid().catch((e) => err("render via observer falhou:", e));
-        }, 120);
-      }, grid);
 
       ns("toolbar inserida com sucesso (idempotente).");
     } else {
       ns("toolbar já presente — mantendo idempotência.");
     }
 
-    // Primeira renderização
-    await renderFromGrid();
-
-    // ===== Funções internas =====
+    // ======== Funções internas ========
 
     function extractVolunteers() {
       const rows = Array.from(grid.querySelectorAll("tr")).filter(
@@ -148,42 +198,32 @@ export async function init(ctx) {
         const tds = Array.from(tr.querySelectorAll("td"));
         if (tds.length < 8) continue;
 
-        // Preserva maiúsculas/minúsculas originais para exibição
+        // Colunas conforme amostra: Nome, PF, Ativo (checkbox), Unidade, OrgDepto, Função, DataInicio, DataSaida
         const nome = textPreservandoCase(tds[0]);
         const pf = textPreservandoCase(tds[1]);
         const ativoEl = tr.querySelector('input[type="checkbox"]');
-        const ativo = Boolean(ativoEl?.checked);
-        const unidade = textPreservandoCase(tds[3]);
+        const ativoMarcado = Boolean(ativoEl?.checked);
+        const unidade = textPreservandoCase(tds[3]);   // reservado para futuros filtros
         const orgDepto = textPreservandoCase(tds[4]);
         const funcao = textPreservandoCase(tds[5]);
         const dataInicio = textPreservandoCase(tds[6]);
         const dataSaida = textPreservandoCase(tds[7]);
 
-        // Inativo se houver Data Saída preenchida
+        // Regra de ativo: checkbox marcado E sem DataSaida
         const inativoPorSaida = dataSaida && dataSaida.trim().length > 0;
-        const ativoFinal = ativo && !inativoPorSaida;
+        const ativo = ativoMarcado && !inativoPorSaida;
 
-        items.push({
-          nome,
-          pf,
-          ativo: ativoFinal,
-          unidade,
-          orgDepto,
-          funcao,
-          dataInicio,
-          dataSaida,
-        });
+        items.push({ nome, pf, ativo, unidade, orgDepto, funcao, dataInicio, dataSaida });
       }
       return items;
     }
 
-    // ---- WBS com estereótipos <<ativo>> e <<inativo>> + estilos no <style> ----
+    // Monta WBS com árvore por OrgDepto (split "\") + estilos de estereótipo
     function buildPlantUml(vols) {
       const esc = (s) => (s || "").trim();
 
-      // Árvore raiz com agrupamento por OrgDepto (split por "\")
+      // Constrói árvore
       const root = { name: "Voluntários", children: [], volunteers: [] };
-
       for (const v of vols) {
         const path = (v.orgDepto || "—").split("\\").map((p) => esc(p));
         let node = root;
@@ -198,18 +238,13 @@ export async function init(ctx) {
         node.volunteers.push(v);
       }
 
-      // ======== Lógica do "raiz condicional" ========
-      // Se existir APENAS um nível raiz (ex.: "Colegiado Administrativo")
-      // e não houver voluntários diretamente em root, usamos esse nó como raiz
-      // e NÃO imprimimos "* Voluntários".
-      const onlyOneRoot =
-        root.volunteers.length === 0 && root.children.length === 1;
+      // Raiz condicional: só usa "Voluntários" se houver múltiplos topos
+      const onlyOneRoot = root.volunteers.length === 0 && root.children.length === 1;
 
-      // Renderização
       const lines = [];
       lines.push("@startwbs");
 
-      // Estilos WBS (classes .ativo / .inativo)
+      // Bloco de estilos (.ativo / .inativo)
       lines.push("<style>");
       lines.push("wbsDiagram {");
       lines.push("  .ativo {");
@@ -221,20 +256,17 @@ export async function init(ctx) {
       lines.push("}");
       lines.push("</style>");
 
+      // Render recursivo
       function renderNode(node, prefix) {
         lines.push(`${prefix} ${node.name}`);
 
-        // Subnós (ordenados)
-        for (const child of node.children.sort((a, b) =>
-          a.name.localeCompare(b.name)
-        )) {
+        // Subnós ordenados
+        for (const child of node.children.sort((a, b) => a.name.localeCompare(b.name))) {
           renderNode(child, prefix + "*");
         }
 
-        // Voluntários (ordenados por nome)
-        for (const v of node.volunteers.sort((a, b) =>
-          a.nome.localeCompare(b.nome)
-        )) {
+        // Voluntários ordenados
+        for (const v of node.volunteers.sort((a, b) => a.nome.localeCompare(b.nome))) {
           const stereo = v.ativo ? "ativo" : "inativo";
           const label = `${esc(v.nome)} (${esc(v.funcao) || "—"})`;
           lines.push(`${prefix}* ${label} <<${stereo}>>`);
@@ -242,11 +274,8 @@ export async function init(ctx) {
       }
 
       if (onlyOneRoot) {
-        // Usa o único filho como raiz
-        const single = root.children[0];
-        renderNode(single, "*");
+        renderNode(root.children[0], "*");
       } else {
-        // Mantém "Voluntários" como raiz visível
         renderNode(root, "*");
       }
 
@@ -254,66 +283,71 @@ export async function init(ctx) {
       return lines.join("\n");
     }
 
-    async function renderFromGrid() {
-      const statusEl = document.querySelector(
-        "#" + TOOLBAR_ID + " .cosmoware-status"
-      );
-      const previewImg = document.querySelector(
-        "#cosmoware-pf-vol-preview .cosmoware-preview-img"
-      );
-      const downloadA = document.querySelector(
-        "#" + TOOLBAR_ID + " .cosmoware-btn-download"
-      );
+    // Geração sob demanda (único ponto que chama Kroki)
+    async function generateOnce() {
+      const statusEl = document.querySelector("#" + TOOLBAR_ID + " .cosmoware-status");
+      const previewImg = document.querySelector("#cosmoware-pf-vol-preview .cosmoware-preview-img");
+      const downloadA = document.querySelector("#" + TOOLBAR_ID + " .cosmoware-btn-download");
 
       try {
+        PREFS = loadPrefs(); // ressincroniza formato
+
         statusEl && (statusEl.textContent = "— coletando dados…");
         const items = extractVolunteers();
         ns(`extraídos ${items.length} voluntários (página atual da grade).`);
 
-        statusEl && (statusEl.textContent = "— gerando PlantUML…");
+        statusEl && (statusEl.textContent = `— gerando PlantUML… (formato ${PREFS.fmt.toUpperCase()})`);
         const uml = buildPlantUml(items);
 
-        // Logar UML para inspeção
+        // Inspeção no console
         ns("=== PlantUML WBS gerado ===\n" + uml + "\n=== fim PlantUML ===");
 
-        statusEl && (statusEl.textContent = "— solicitando PNG ao Kroki…");
-        const pngData = await krokiPlantUmlToPng?.(uml);
-        ns("PNG recebido do Kroki.");
+        statusEl && (statusEl.textContent = `— solicitando ${PREFS.fmt.toUpperCase()} ao Kroki…`);
 
-        let blob;
-        if (pngData instanceof Blob) {
-          blob = pngData;
-        } else if (
-          pngData instanceof ArrayBuffer ||
-          ArrayBuffer.isView?.(pngData)
-        ) {
-          const ab = pngData instanceof ArrayBuffer ? pngData : pngData.buffer;
-          blob = new Blob([ab], { type: "image/png" });
-        } else if (typeof pngData === "string") {
-          if (pngData.startsWith("data:image/png")) {
-            const b64 = pngData.split(",")[1];
-            const bin = atob(b64);
-            const u8 = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-            blob = new Blob([u8], { type: "image/png" });
-          } else {
-            // Caso Kroki retorne URL/dataURI já pronto
-            previewImg && (previewImg.src = pngData);
+        let blob, url;
+        if (PREFS.fmt === "svg" && typeof krokiPlantUmlToSvg === "function") {
+          const svgData = await krokiPlantUmlToSvg(uml);
+          ns("SVG recebido do Kroki.");
+          if (svgData instanceof Blob) {
+            blob = svgData;
+          } else if (svgData instanceof ArrayBuffer || ArrayBuffer.isView?.(svgData)) {
+            const ab = svgData instanceof ArrayBuffer ? svgData : svgData.buffer;
+            blob = new Blob([ab], { type: "image/svg+xml" });
+          } else if (typeof svgData === "string") {
+            url = svgData;
+          }
+        } else {
+          if (PREFS.fmt === "svg") warn("krokiPlantUmlToSvg indisponível — usando PNG como fallback.");
+          const pngData = await krokiPlantUmlToPng?.(uml);
+          ns("PNG recebido do Kroki.");
+          if (pngData instanceof Blob) {
+            blob = pngData;
+          } else if (pngData instanceof ArrayBuffer || ArrayBuffer.isView?.(pngData)) {
+            const ab = pngData instanceof ArrayBuffer ? pngData : pngData.buffer;
+            blob = new Blob([ab], { type: "image/png" });
+          } else if (typeof pngData === "string") {
+            url = pngData;
           }
         }
 
-        let url;
-        if (blob) {
+        if (!url && blob) {
           url = URL.createObjectURL(blob);
-          previewImg && (previewImg.src = url);
         }
 
-        const fname = `ICNET-voluntarios-${
-          timeStampCompact?.() || Date.now()
-        }.png`;
+        if (previewImg && url) {
+          previewImg.src = url;
+        }
+
+        const ext = PREFS.fmt === "svg" && typeof krokiPlantUmlToSvg === "function" ? "svg" : "png";
+        const fname = `ICNET-voluntarios-${timeStampCompact?.() || Date.now()}.${ext}`;
 
         if (downloadA) {
-          if (url) downloadA.href = url;
+          if (url) {
+            downloadA.href = url;
+            downloadA.removeAttribute("aria-disabled");
+            downloadA.style.pointerEvents = "";
+            downloadA.style.opacity = "";
+          }
           downloadA.setAttribute("download", fname);
         }
 
@@ -321,7 +355,7 @@ export async function init(ctx) {
         ns("organograma renderizado com sucesso.");
       } catch (e) {
         statusEl && (statusEl.textContent = "— erro");
-        err("falha ao renderizar organograma:", e);
+        err("falha ao gerar organograma:", e);
       }
     }
   } catch (e) {
