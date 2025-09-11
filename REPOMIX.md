@@ -2025,6 +2025,10 @@ CosmoWare é **aberto a contribuições humanas e via IA**.
 
 > ✨ **CosmoWare = Cosmoética + Software** ✨  
 Promovendo lucidez, organização e leveza no uso da tecnologia.
+
+# Suporte
+
+Está interessado na ferramenta? Acesse o [grupo do WhatsApp](https://chat.whatsapp.com/E27UQLdYsxFJs5PVHAWgkg?mode=ems_share_c).
 </file>
 
 </files>
