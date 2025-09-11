@@ -2,6 +2,6 @@
   "scripts": {
     "repomix": "repomix --output REPOMIX.md"
   },
-  "devDependencies": {
-  }
+  "devDependencies": {},
+  "version": "25.09.11.1757549248220"
 }
