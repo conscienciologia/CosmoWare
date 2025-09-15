@@ -65,8 +65,8 @@
 *.ttf   binary
 *.otf   binary
 *.eot   binary
-*.crx   binary   # Chrome extension package
-*.pem   binary   # private key when packing locally (do not commit)
+*.crx   binary
+*.pem   binary
 
 # --- GitHub Linguist hints (repository language stats / code vs docs)
 doc/**         linguist-documentation
