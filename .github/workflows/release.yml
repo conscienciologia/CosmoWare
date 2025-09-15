@@ -23,15 +23,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq zip
 
-      - name: Compute date-based version (YY.MM.DD.<ms>)
+      - name: Compute date-based version (YY.M.D.HHMM)
         id: calc_ver
         shell: bash
         run: |
-          DATE=$(date -u +'%y.%m.%d')
-          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
-          VERSION="${DATE}.${TS}"
+          # Year (two-digits) without leading zeros handled as integer
+          Y_RAW=$(date -u +%y)
+          Y=$((10#$Y_RAW))
+
+          # Month/Day without leading zeros
+          M=$(date -u +%-m)
+          D=$(date -u +%-d)
+
+          # HHMM as integer (removes any leading zero from hour/minute)
+          HM_RAW=$(date -u +%H%M)   # e.g., 0210
+          HM=$((10#$HM_RAW))        # e.g., 210
+
+          VERSION="${Y}.${M}.${D}.${HM}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Computed version: ${VERSION}"
+
+          # Optional human-friendly version name
+          VNAME=$(date -u +'%y.%m.%d-%H:%MZ')
+          echo "version_name=${VNAME}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION} (version_name=${VNAME})"
 
       - name: Make build script executable
         run: chmod +x scripts/build-zip.sh
@@ -40,8 +54,8 @@ jobs:
         shell: bash
         run: |
           if [ -f manifest.json ]; then
-            echo "Updating manifest.json to version ${{ steps.calc_ver.outputs.version }}"
-            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+            echo "Updating manifest.json to version ${{ steps.calc_ver.outputs.version }} (version_name=${{ steps.calc_ver.outputs.version_name }})"
+            jq --arg v "${{ steps.calc_ver.outputs.version }}"                --arg vn "${{ steps.calc_ver.outputs.version_name }}"                '.version=$v | .version_name=$vn' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
           else
             echo "manifest.json not found. Skipping."
           fi
