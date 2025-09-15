@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Conscienciologia Tools (CosmoWare)",
-  "version": "0.4.0",
+  "version": "25.09.15.1757978951697",
   "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
   "permissions": [
     "scripting",
