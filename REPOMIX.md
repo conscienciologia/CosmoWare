@@ -49,6 +49,7 @@ The content is organized as follows:
   PULL_REQUEST_TEMPLATE.md
 core/
   content.js
+  global-rules.js
   utils.js
 domains/
   icnet/
@@ -58,7 +59,13 @@ domains/
     pessoa-fisica/
       voluntario/
         organograma-voluntarios.js
+    shared/
+      export-grid.js
+    icnet-utils.js
     main.js
+    styles.css
+scripts/
+  build-zip.sh
 templates/
   module-template.js
 .gitattributes
@@ -74,6 +81,7 @@ manifest.json
 package.json
 README.md
 SECURITY.md
+SUBDOMAINS.md
 </directory_structure>
 
 <files>
@@ -151,6 +159,69 @@ Explique o que foi feito e por quê.
     boot();
   }
 })();
+</file>
+
+<file path="core/global-rules.js">
+/*****************************************************
+ * core/global-rules.js
+ * Regras globais independentes de domínio.
+ * Foco: normalização e composição de nomes de arquivo.
+ *****************************************************/
+
+/**
+ * Regra de normalização de tokens.
+ * - minúsculo
+ * - sem acentos/diacríticos
+ * - troca qualquer caractere não [a-z0-9] por "_"
+ * - remove "_" duplicados e bordas
+ */
+export function rule_sanitize_token(s) {
+    return (s || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // remove diacríticos
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Junta vários tokens aplicando a regra de normalização em cada parte,
+ * removendo vazias e usando separador (default "-").
+ */
+export function rule_join_tokens(parts, sep = "-") {
+    const safe = (Array.isArray(parts) ? parts : [parts])
+        .map(rule_sanitize_token)
+        .filter(Boolean);
+    return safe.join(sep);
+}
+
+/**
+ * Timestamp em formato de token estável para nomes de arquivo: yyyymmdd-hhmmss
+ */
+export function rule_timestamp_token(d = new Date()) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+        d.getFullYear().toString() +
+        pad(d.getMonth() + 1) +
+        pad(d.getDate()) +
+        "-" +
+        pad(d.getHours()) +
+        pad(d.getMinutes()) +
+        pad(d.getSeconds())
+    );
+}
+
+/**
+ * Monta um nome de arquivo padronizado:
+ * rule_join_tokens(parts) + "-" + rule_timestamp_token() + "." + ext
+ * Ex.: rule_make_filename(["icnet", ic, breadcrumb], "csv")
+ */
+export function rule_make_filename(parts, ext = "txt", d = new Date()) {
+    const stem = rule_join_tokens(parts);
+    const ts = rule_timestamp_token(d);
+    const safeExt = rule_sanitize_token(ext) || "txt";
+    return `${stem}-${ts}.${safeExt}`;
+}
 </file>
 
 <file path="domains/icnet/administrador/configuracao-ic/organograma.js">
@@ -457,30 +528,387 @@ export async function init(ctx) {
 }
 </file>
 
+<file path="domains/icnet/shared/export-grid.js">
+// domains/icnet/shared/export-grid.js
+// Toolbar global por FormEntry + botão "Exportar" para CSV (FA 5.0.7)
+// - NÃO injeta CSS externo (compatível com Chrome Web Store)
+// - Reutiliza a barra do organograma (#ct-org-toolbar) quando existir
+// - Exporta a PRIMEIRA table.GridStyle do MESMO FormEntry (sem colspan)
+// - CSV com UTF-8 BOM e CRLF; cabeçalhos de th; links -> texto; checkbox -> true/false
+// - Nome do arquivo via util de domínio: icnet_make_filename()
+
+import {
+  icnet_findFormEntriesWithGrid,
+  icnet_make_filename
+} from "../icnet-utils.js";
+
+export async function init(ctx) {
+  const { utils, doc, href, host } = ctx;
+  const { nsLogger, attachSimpleObserver } = utils || {};
+  const { log, warn, error } = (nsLogger ? nsLogger("[ICNET/EXPORT]") : console);
+
+  try {
+    // Boot-guard por frame
+    if (window.__cosmoware_icnet_export_booted) {
+      log && log("Já inicializado neste frame, ignorando.");
+      return;
+    }
+    window.__cosmoware_icnet_export_booted = true;
+
+    log && log("Boot inicial", { host, href });
+
+    // -------- Utilitários locais (apenas UI/CSV) --------
+
+    function hasFA(doc) {
+      try {
+        const test = doc.createElement("i");
+        test.className = "fas fa-check";
+        test.style.position = "absolute";
+        test.style.left = "-9999px";
+        (doc.body || doc.documentElement).appendChild(test);
+        const fam = getComputedStyle(test).fontFamily || "";
+        test.remove();
+        return /Font Awesome/i.test(fam);
+      } catch {
+        return false;
+      }
+    }
+
+    function iconOrFallback(faName, text = "") {
+      if (hasFA(doc)) {
+        return `<i class="fas ${faName}" aria-hidden="true"></i>${text}`;
+      }
+      const fallback = faName.includes("fa-wrench") ? "🔧"
+        : faName.includes("fa-download") ? "⬇️"
+          : "•";
+      return `${fallback}${text}`;
+    }
+
+    function escapeCsvField(value) {
+      let s = value == null ? "" : String(value);
+      s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const mustQuote = /[",\n]/.test(s);
+      if (mustQuote) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+
+    function extractGridToCsv(entryEl) {
+      const table = entryEl.querySelector("table.GridStyle");
+      if (!table) return { csv: "", rows: 0, cols: 0 };
+
+      const ths = Array.from(table.querySelectorAll("tr.GridHeaderStyle th"));
+      const headers = ths.map((th, i) => {
+        const t = (th.textContent || "").trim();
+        return t || `col_${i + 1}`;
+      });
+
+      const rowsEls = Array.from(table.querySelectorAll("tr"))
+        .filter(tr => !tr.classList.contains("GridHeaderStyle") && !tr.classList.contains("GridPagerStyle"));
+
+      const lines = [];
+      lines.push(headers.map(escapeCsvField).join(","));
+
+      let dataRowCount = 0;
+      for (const tr of rowsEls) {
+        const tds = Array.from(tr.querySelectorAll("td"));
+        if (tds.length === 0) continue;
+
+        const row = tds.map(td => {
+          const chk = td.querySelector('input[type="checkbox"]');
+          if (chk) return escapeCsvField(chk.checked ? "true" : "false");
+          const txt = (td.innerText || "").trim();
+          return escapeCsvField(txt);
+        });
+
+        lines.push(row.join(","));
+        dataRowCount++;
+      }
+
+      const bom = "\uFEFF";
+      const csv = bom + lines.join("\r\n") + "\r\n";
+      return { csv, rows: dataRowCount, cols: headers.length };
+    }
+
+    function downloadCsv(csvText, filename) {
+      const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = doc.createElement("a");
+      a.href = url;
+      a.download = filename;
+      doc.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 0);
+    }
+
+    function onExportClick(toolbarEl, entryEl) {
+      try {
+        const status = toolbarEl.querySelector(".cosmoware-status");
+        if (status) status.textContent = "exportando…";
+
+        const { csv, rows, cols } = extractGridToCsv(entryEl);
+        const filename = icnet_make_filename("csv", doc, new Date());
+
+        downloadCsv(csv, filename);
+
+        log && log("CSV gerado.", { filename, rows, cols });
+        if (status) status.textContent = `exportado: ${rows} linha(s), ${cols} coluna(s).`;
+      } catch (e) {
+        (error || console.error)("Falha ao exportar CSV:", e);
+        const status = toolbarEl.querySelector(".cosmoware-status");
+        if (status) status.textContent = "falha ao exportar. ver console.";
+      }
+    }
+
+    // -------- UI: toolbar / botão --------
+
+    function ensureToolbar(entryEl) {
+      // 1) Se a tela tiver a barra do organograma, reutilize-a
+      const orgToolbar = doc.querySelector("#ct-org-toolbar");
+      if (orgToolbar) {
+        if (!orgToolbar.querySelector(".cosmoware-btn-export")) {
+          const btn = doc.createElement("button");
+          btn.type = "button";
+          btn.className = "cosmoware-btn-export btn btn-outline-primary btn-sm d-inline-flex align-items-center";
+          btn.innerHTML = iconOrFallback("fa-download", " Exportar");
+
+          btn.addEventListener("click", () => {
+            let status = orgToolbar.querySelector(".cosmoware-status");
+            if (!status) {
+              status = doc.createElement("span");
+              status.className = "cosmoware-status text-muted small ml-2";
+              orgToolbar.appendChild(status);
+            }
+            onExportClick(orgToolbar, entryEl);
+          });
+
+          orgToolbar.appendChild(btn);
+          (log || console.log)("Botão Exportar adicionado na barra do organograma.");
+        }
+        entryEl.dataset.cosmowareToolbar = "1";
+        return orgToolbar;
+      }
+
+      // 2) Caso não exista organograma toolbar, criamos a nossa por FormEntry
+      if (entryEl.dataset.cosmowareToolbar === "1") {
+        return entryEl.querySelector(":scope > .cosmoware-toolbar") || null;
+      }
+
+      const toolbar = doc.createElement("div");
+      toolbar.className = "cosmoware-toolbar d-flex align-items-center gap-2 mb-2 p-2 border rounded";
+
+      const title = doc.createElement("strong");
+      title.className = "mr-2 d-flex align-items-center";
+      title.innerHTML = iconOrFallback("fa-wrench", " Extensão");
+
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "cosmoware-btn-export btn btn-outline-primary btn-sm d-inline-flex align-items-center";
+      btn.innerHTML = iconOrFallback("fa-download", " Exportar");
+
+      const status = doc.createElement("span");
+      status.className = "cosmoware-status text-muted small ml-2";
+      status.textContent = "pronto";
+
+      toolbar.appendChild(title);
+      toolbar.appendChild(btn);
+      toolbar.appendChild(status);
+
+      entryEl.insertBefore(toolbar, entryEl.firstChild);
+      entryEl.dataset.cosmowareToolbar = "1";
+
+      log && log("Toolbar criada para FormEntry.", { entry: entryEl });
+
+      btn.addEventListener("click", () => onExportClick(toolbar, entryEl));
+
+      return toolbar;
+    }
+
+    function run() {
+      const targets = icnet_findFormEntriesWithGrid(doc);
+      if (targets.length === 0) {
+        log && log("Nenhum FormEntry com GridStyle detectado neste frame.");
+        return;
+      }
+      log && log(`FormEntry com GridStyle detectados: ${targets.length}`);
+      targets.forEach(ensureToolbar);
+    }
+
+    const detach = attachSimpleObserver ? attachSimpleObserver(run, doc) : null;
+    run();
+
+    log && log("Exportação CSV ativa.");
+  } catch (e) {
+    (error || console.error)("Falha no init do export-grid:", e);
+  }
+}
+</file>
+
+<file path="domains/icnet/icnet-utils.js">
+/*****************************************************
+ * domains/icnet/icnet-utils.js
+ * Utilitários específicos do domínio ICNET.
+ * - Breadcrumb "lbPath" (último da página)
+ * - Nome da IC a partir dos selects conhecidos
+ * - Seleção de blocos/tabelas no padrão ICNET
+ * - Geração de nomes de arquivo usando regras globais
+ *****************************************************/
+
+import {
+    rule_sanitize_token,
+    rule_join_tokens,
+    rule_timestamp_token,
+    rule_make_filename
+} from "../../core/global-rules.js";
+
+/**
+ * Retorna o ÚLTIMO breadcrumb (#lbPath) presente no documento
+ * (ICNET às vezes renderiza mais de um, ex.: iframes aninhados).
+ */
+export function icnet_readBreadcrumbLast(doc = document) {
+    const nodes = Array.from(doc.querySelectorAll("#TbPathAndNavigation #lbPath"));
+    const el = nodes.length ? nodes[nodes.length - 1] : null;
+    const raw = el ? (el.textContent || "").trim() : "";
+    return { raw, el };
+}
+
+/** Converte o breadcrumb do ICNET para um token seguro (minúsculo/sem acento/espaço). */
+export function icnet_breadcrumb_token(doc = document) {
+    const { raw } = icnet_readBreadcrumbLast(doc);
+    return rule_sanitize_token(raw) || "grid";
+}
+
+/**
+ * Obtém o nome da IC (JURISCONS, etc.) a partir dos selects conhecidos no ICNET
+ * e devolve já tokenizado. Fallback: "ic".
+ */
+export function icnet_ic_token(doc = document) {
+    const sel =
+        doc.querySelector("#navbarIC select") ||
+        doc.querySelector("#ddList_ICs") ||
+        doc.querySelector('select[name="ddList_ICs"]');
+
+    if (sel && sel.options && sel.selectedIndex >= 0) {
+        const txt = sel.options[sel.selectedIndex].text || sel.value || "";
+        const v = (txt || "").trim();
+        if (v) return rule_sanitize_token(v);
+    }
+    return "ic";
+}
+
+/**
+ * Encontra os containers FormEntry que possuam GridStyle (padrão ICNET).
+ * Observação: esse seletor é específico do ICNET.
+ */
+export function icnet_findFormEntriesWithGrid(doc = document) {
+    const entries = Array.from(doc.querySelectorAll("div.FormEntry"));
+    return entries.filter((entry) => entry.querySelector("table.GridStyle"));
+}
+
+/**
+ * Gera um nome de arquivo padronizado para ICNET:
+ * icnet-<ic>-<breadcrumb>-<timestamp>.<ext>
+ */
+export function icnet_make_filename(ext = "csv", doc = document, now = new Date()) {
+    const ic = icnet_ic_token(doc);
+    const bc = icnet_breadcrumb_token(doc);
+    return rule_make_filename(["icnet", ic, bc], ext, now);
+}
+
+// (re-export) Conveniência para módulos do icnet:
+export {
+    rule_sanitize_token,
+    rule_join_tokens,
+    rule_timestamp_token,
+    rule_make_filename
+} from "../../core/global-rules.js";
+</file>
+
+<file path="domains/icnet/styles.css">
+/* domains/icnet/styles.css */
+/* CSS mínimo para complementar Bootstrap (mantendo visual clean) */
+.cosmoware-toolbar {
+  background: #fff;
+}
+.cosmoware-toolbar .cosmoware-btn i {
+  margin-right: 6px;
+}
+/* Opcional: ajuste de espaçamento entre elementos quando Bootstrap não resolver */
+.cosmoware-toolbar .gap-2 > * + * {
+  margin-left: .5rem;
+}
+</file>
+
+<file path="scripts/build-zip.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Requisitos: jq, zip
+command -v jq >/dev/null || { echo "jq não encontrado. Instale e rode novamente."; exit 1; }
+command -v zip >/dev/null || { echo "zip não encontrado. Instale e rode novamente."; exit 1; }
+
+# Lê versão do manifest.json
+VERSION="$(jq -r '.version' manifest.json)"
+if [[ -z "${VERSION}" || "${VERSION}" == "null" ]]; then
+  echo "Não foi possível ler .version do manifest.json"
+  exit 1
+fi
+
+NAME="cosmoware-extension-v${VERSION}"
+OUT_DIR="dist"
+OUT_ZIP="${OUT_DIR}/${NAME}.zip"
+OUT_SHA="${OUT_ZIP}.sha256"
+
+# Limpa e recria dist/
+rm -rf "${OUT_DIR}"
+mkdir -p "${OUT_DIR}/pkg"
+
+# Lista de inclusões (ajuste se necessário)
+INCLUDE=(
+  "manifest.json"
+  "core"
+  "domains"
+  "templates"
+  "icons"
+  # "README.md"   # descomente se quiser incluir
+  # "LICENSE"     # descomente se quiser incluir
+)
+
+# Verificações mínimas
+[[ -f manifest.json ]] || { echo "manifest.json ausente"; exit 1; }
+[[ -d core ]] || { echo "core/ ausente"; exit 1; }
+[[ -d domains ]] || { echo "domains/ ausente"; exit 1; }
+
+# Copia
+for p in "${INCLUDE[@]}"; do
+  if [ -e "$p" ]; then
+    cp -R "$p" "${OUT_DIR}/pkg/"
+  fi
+done
+
+# Remoções defensivas (dentro do pacote)
+find "${OUT_DIR}/pkg" -name "*.map" -delete || true
+find "${OUT_DIR}/pkg" -name ".DS_Store" -delete || true
+find "${OUT_DIR}/pkg" -name "node_modules" -type d -prune -exec rm -rf {} + || true
+find "${OUT_DIR}/pkg" -name ".git" -type d -prune -exec rm -rf {} + || true
+find "${OUT_DIR}/pkg" -name "tests" -type d -prune -exec rm -rf {} + || true
+
+# Compacta
+( cd "${OUT_DIR}/pkg" && zip -r "../${NAME}.zip" . )
+
+# Checksum
+( cd "${OUT_DIR}" && sha256sum "${NAME}.zip" | awk '{print $1}' > "${NAME}.zip.sha256" )
+
+echo "OK: ${OUT_ZIP}"
+echo "SHA256: $(cat "${OUT_SHA}")"
+</file>
+
 <file path="templates/module-template.js">
 export async function init(ctx) { console.log('Template de módulo CosmoWare'); }
-</file>
-
-<file path=".gitattributes">
-# Use line endings do sistema operacional local
-* text=auto
-
-# Scripts shell sempre LF
-*.sh text eol=lf
-
-# Batch/PowerShell sempre CRLF
-*.bat text eol=crlf
-*.ps1 text eol=crlf
-
-# JSON, YAML, MD, etc. forçar LF (para CI/CD não quebrar)
-*.yml text eol=lf
-*.yaml text eol=lf
-*.json text eol=lf
-*.md text eol=lf
-</file>
-
-<file path=".gitignore">
-./repomix-output.xml
 </file>
 
 <file path=".repomixignore">
@@ -505,149 +933,6 @@ build/
 *.log
 </file>
 
-<file path="ARCHITECTURE.md">
-# ARCHITECTURE
-
-## Visão Geral
-
-CosmoWare é uma extensão **modular** para Chrome (Manifest V3) que atua em páginas específicas dos sistemas da Conscienciologia (`*.conscienciologia.org.br`).  
-
-O fluxo de execução é:
-
-1. **`core/content.js`**: carregado em todos os frames.  
-   - Detecta o domínio (ex.: `icnet.conscienciologia.org.br`).  
-   - Encaminha para o **roteador de domínio**.
-
-2. **`domains/<subdomínio>/main.js`**: router por domínio.  
-   - Lê breadcrumb e URL da página.  
-   - Identifica a rota correspondente.  
-   - Carrega dinamicamente o módulo da feature.
-
-3. **`domains/<subdomínio>/<rota>/<feature>.js`**: módulo da funcionalidade.  
-   - Exporta apenas `init(ctx)`.  
-   - Contém toda a lógica daquela tela.  
-   - Deve ser idempotente (não duplicar UI).
-
----
-
-## Filosofia de Modularização
-
-- **Primeiro nível:** domínio (ex.: `icnet/`).  
-- **Segundo nível:** caminho da rota (ex.: `administrador/configuracao-ic/`).  
-- **Arquivo final:** a feature da tela (ex.: `organograma.js`).  
-
-Exemplo:
-
-```
-domains/
-  icnet/
-    main.js
-    administrador/
-      configuracao-ic/
-        organograma.js
-```
-
-Cada feature é **independente** e pode ser desenvolvida, revisada ou substituída isoladamente.
-
----
-
-## Contrato do Módulo
-
-Todo módulo deve exportar uma função assíncrona `init(ctx)`:
-
-```js
-export async function init(ctx) {
-  const { utils, doc, href, host } = ctx;
-  const { nsLogger, readBreadcrumb } = utils;
-  const { log } = nsLogger("[ICNET/FEATURE]");
-
-  if (window.__my_feature_loaded) return;
-  window.__my_feature_loaded = true;
-
-  const { norm } = readBreadcrumb(doc);
-  if (!norm.includes("administrador » configuração ic » organograma")) return;
-
-  log("Feature iniciada!");
-  // ... sua lógica aqui ...
-}
-```
-
-### `ctx` contém:
-- `doc`: documento do frame atual.  
-- `href`, `host`: informações do frame.  
-- `utils`: conjunto de utilidades globais (logger, normalização, Kroki, observers, etc.).
-
----
-
-## Utilidades Disponíveis (`ctx.utils`)
-
-- `nsLogger(namespace)`: cria logger com prefixo consistente (`log`, `warn`, `error`).  
-- `normalizeText(str)`: remove acentos e normaliza para minúsculas.  
-- `readBreadcrumb(doc)`: retorna `{ raw, norm }` do breadcrumb atual.  
-- `krokiPlantUmlToPng(uml)`: gera Blob de PNG via Kroki.  
-- `timeStampCompact()`: retorna timestamp compacto para nomear arquivos.  
-- `attachSimpleObserver(fn, doc)`: executa `fn` quando DOM muda, desconectando após sucesso.
-
----
-
-## Convenções
-
-- **IDs e classes**: prefixo `cosmoware-` ou `ct-`.  
-- **Logs**: prefixo fixo por módulo (ex.: `[ICNET/ORG]`).  
-- **Breadcrumb**: principal forma de detecção da rota.  
-- **URL params**: podem complementar a detecção (`?f=1028`).  
-- **Idempotência**: cada módulo deve garantir que não injete UI mais de uma vez.
-
----
-
-## Exemplo de Roteador de Domínio (`icnet/main.js`)
-
-```js
-import { nsLogger, readBreadcrumb } from "../../core/utils.js";
-
-const { log } = nsLogger("[ICNET/MAIN]");
-
-const routes = [
-  {
-    name: "administrador/configuracao-ic/organograma",
-    match: (ctx) => {
-      const { norm } = readBreadcrumb(ctx.doc);
-      return norm.includes("administrador » configuração ic » organograma");
-    },
-    loader: () => import(chrome.runtime.getURL(
-      "domains/icnet/administrador/configuracao-ic/organograma.js"
-    )),
-  },
-];
-
-export async function init(ctx) {
-  for (const r of routes) {
-    try {
-      if (r.match(ctx)) {
-        log(`Rota detectada: ${r.name}`);
-        const mod = await r.loader();
-        await mod.init(ctx);
-        return;
-      }
-    } catch (e) {
-      console.error(`[ICNET/MAIN] erro em rota ${r.name}`, e);
-    }
-  }
-}
-```
-
----
-
-## Boas Práticas
-
-- Atuar **somente** na tela correta.  
-- Usar logs claros e consistentes.  
-- Não duplicar elementos visuais.  
-- Não depender de outra feature.  
-- Respeitar privacidade (não logar dados pessoais).  
-- PRs pequenos e focados em **uma tela/uma funcionalidade**.
-</file>
-
 <file path="CODE_OF_CONDUCT.md">
 # Código de Conduta — CosmoWare
 
@@ -664,6 +949,20 @@ Fluxo de contribuição e boas práticas.
 # SECURITY
 
 Políticas de segurança e privacidade.
+</file>
+
+<file path="SUBDOMAINS.md">
+# Domains
+
+# ICnet
+
+URL: http://icnet.conscienciologia.org.br
+
+
+
+# Docs
+
+URL: https://docs.conscienciologia.org.br/
 </file>
 
 <file path=".github/workflows/repomix.yml">
@@ -1136,100 +1435,88 @@ export async function init(ctx) {
 }
 </file>
 
-<file path="domains/icnet/main.js">
-/*****************************************************
- * domains/icnet/main.js – Router do domínio ICNET
- * Decide qual módulo de tela carregar (por breadcrumb/URL)
- * Logs: [ICNET/MAIN]
- *****************************************************/
-export async function init(context) {
-  const { utils } = context;
-  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils;
-  const { log, warn } = nsLogger("[ICNET/MAIN]");
+<file path=".gitignore">
+# CosmoWare — sensible defaults for a Chrome Extension repo
+# ----------------------------------------------------------------------------
+# OS / Filesystem
+.DS_Store
+Thumbs.db
 
-  if (window.__ct_icnet_main_loaded) return;
-  window.__ct_icnet_main_loaded = true;
+# Editors / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
 
-  // Rotas do domínio icnet
-  // match(ctx) → boolean, loader() → Promise<module>
-  const routes = [
-    {
-      name: "administrador/configuracao-ic/organograma",
-      match: (ctx) => {
-        const { norm } = readBreadcrumb(ctx.doc);
-        const alvo = normalizeText("Administrador » Configuração IC » Organograma");
-        // Heurística adicional (opcional): f=1028 no URL
-        const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href);
-        return norm.includes(alvo) || hintUrl;
-      },
-      loader: () =>
-        import(chrome.runtime.getURL(
-          "domains/icnet/administrador/configuracao-ic/organograma.js"
-        ))
-    },
-    {
-    // Pessoa Física » Voluntário — Organograma de Voluntários
-    name: "pessoa-fisica/voluntario/organograma-voluntarios",
-    match: (ctx) => {
-        try {
-        // readBreadcrumb retorna objeto { raw, norm, ... } no seu router
-        const { norm } = readBreadcrumb(ctx.doc);
-        const alvo = normalizeText("Pessoa Física » Voluntário");
+# Node & package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+.eslintcache
+.stylelintcache
 
-        // Heurística adicional: rota também casa por ?f=29
-        const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href);
+# Lockfiles:
+# 👉 Recommended: commit exactly one lockfile (npm, yarn or pnpm).
+#    If you intentionally don't use a lockfile, uncomment the line below.
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
 
-        // Mais tolerante: 'includes' em vez de igualdade estrita
-        return (norm && norm.includes(alvo)) || hintUrl;
-        } catch {
-        return false;
-        }
-    },
-    loader: () =>
-        import(
-        chrome.runtime.getURL(
-            "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
-        )
-        )
-    }
+# Builds / Artifacts
+dist/
+build/
+coverage/
+*.coverage
+*.lcov
 
+# Bundlers / Caches
+.parcel-cache/
+.rollup.cache/
+.esbuild/
+.turbo/
+.cache/
+webpack-stats.json
+.next/
+.nuxt/
+.svelte-kit/
 
-    // Adicione novas rotas aqui no futuro
-  ];
+# Chrome Extension packaging
+*.crx
+*.pem            # private key generated when packing locally
+*.zip            # release zips are attached in GitHub Releases, not committed
 
-  let bootedOnce = false;
+# Environment / secrets
+.env
+.env.*
+!.env.example
 
-  async function tryRoute() {
-    if (bootedOnce) return;
-    const route = routes.find(r => {
-      try { return r.match(context); } catch { return false; }
-    });
-    if (!route) return;
+# Temporary files
+tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
 
-    log("Rota detectada:", route.name);
-    try {
-      const mod = await route.loader();
-      if (typeof mod?.init !== "function") {
-        warn(`Módulo ${route.name} não exporta init()`);
-        return;
-      }
-      await mod.init({ ...context, utils });
-      bootedOnce = true;
-      log(`Módulo ${route.name} inicializado.`);
-    } catch (e) {
-      console.error("[ICNET/MAIN]", "Falha ao carregar módulo:", route.name, e);
-    }
-  }
+# Logs
+*.log
+logs/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
 
-  // Observa mutações da página (SPA/iframe) para tentar casar a rota
-  const detach = attachSimpleObserver(tryRoute, context.doc);
+# RepoMix (keep REPOMIX.md tracked; ignore only the output file)
+repomix-output.xml
 
-  // Primeira tentativa imediata
-  tryRoute();
-
-  // Cleanup automático quando necessário? (opcional)
-  // window.addEventListener("beforeunload", detach);
-}
+# OS-specific trash
+*.Trash
+ehthumbs.db
+Icon?
 </file>
 
 <file path=".repomixrc.json">
@@ -1280,6 +1567,395 @@ export async function init(context) {
     "codeFence": true
   }
 }
+</file>
+
+<file path="ARCHITECTURE.md">
+# ARCHITECTURE
+
+## Visão Geral
+
+CosmoWare é uma extensão **modular** para Chrome (Manifest V3) que atua em páginas específicas dos sistemas da Conscienciologia (`*.conscienciologia.org.br`).  
+
+Fluxo principal:
+1. **`core/content.js`**: carregado em todos os frames.  
+   - Detecta o domínio (ex.: `icnet.conscienciologia.org.br`).  
+   - Encaminha para o **roteador de domínio**.
+
+2. **`domains/<domínio>/main.js`**: router por domínio.  
+   - Lê breadcrumb/URL da página (cada domínio tem regra própria).  
+   - Identifica a rota correspondente.  
+   - Carrega dinamicamente o módulo da feature.
+
+3. **`domains/<domínio>/<rota>/<feature>.js`**: módulo da funcionalidade.  
+   - Exporta apenas `init(ctx)`.  
+   - Deve ser idempotente (não duplicar UI).  
+   - Contém toda a lógica daquela tela.
+
+---
+
+## Filosofia de Modularização
+
+- **Primeiro nível:** domínio (ex.: `icnet/`).  
+- **Segundo nível:** caminho da rota (ex.: `administrador/configuracao-ic/`).  
+- **Arquivo final:** a feature da tela (ex.: `organograma.js`).  
+
+Cada feature é **independente** e pode ser criada ou evoluída isoladamente, inclusive com ajuda de IA.
+
+---
+
+## Contrato do Módulo
+
+Todo módulo deve exportar uma função assíncrona `init(ctx)`:
+
+```js
+export async function init(ctx) {
+  const { utils, doc, href, host } = ctx;
+  const { nsLogger } = utils;
+  const { log } = nsLogger("[ICNET/FEATURE]");
+
+  if (window.__my_feature_loaded) return;
+  window.__my_feature_loaded = true;
+
+  // verificação de breadcrumb ou URL aqui...
+  log("Feature iniciada!");
+}
+```
+
+### `ctx` contém:
+- `doc`: documento do frame atual.  
+- `href`, `host`: informações do frame.  
+- `utils`: conjunto de utilidades globais (`nsLogger`, `attachSimpleObserver`, `krokiPlantUmlToPng`, etc.).
+
+---
+
+## Utilitários Globais (`core/`)
+
+- **`utils.js`**: logger, normalização de texto, `readBreadcrumb`, timestamps, Kroki (PlantUML), observer de DOM.  
+- **`global-rules.js`**: regras de padronização independentes de domínio:
+  - `rule_sanitize_token(s)` → minúsculo, sem acentos, `_` como separador.  
+  - `rule_join_tokens(parts)` → une tokens normalizados.  
+  - `rule_timestamp_token(d)` → `yyyymmdd-hhmmss`.  
+  - `rule_make_filename(parts, ext, d)` → `tokens-timestamp.ext`.
+
+Essas funções garantem que nomes de arquivos gerados sejam **consistentes** em todos os módulos.
+
+---
+
+## Utilitários por Domínio (`domains/<domínio>/*-utils.js`)
+
+Exemplo ICNET (`domains/icnet/icnet-utils.js`):
+- `icnet_readBreadcrumbLast(doc)` → último breadcrumb `#TbPathAndNavigation #lbPath`.  
+- `icnet_breadcrumb_token(doc)` → breadcrumb normalizado (via regras globais).  
+- `icnet_ic_token(doc)` → IC atual (ex.: `JURISCONS`).  
+- `icnet_findFormEntriesWithGrid(doc)` → `div.FormEntry` com `table.GridStyle`.  
+- `icnet_make_filename(ext, doc, d)` → `icnet-<ic>-<breadcrumb>-<timestamp>.<ext>`.
+
+Cada domínio define os seus utilitários conforme sua estrutura de HTML.
+
+---
+
+## Padrão de Router por Domínio
+
+Exemplo simplificado:
+
+```js
+const routes = [
+  {
+    name: "administrador/configuracao-ic/organograma",
+    match: (ctx) => ctx.utils.readBreadcrumb(ctx.doc).norm.includes("organograma"),
+    loader: () => import(chrome.runtime.getURL(
+      "domains/icnet/administrador/configuracao-ic/organograma.js"
+    )),
+  },
+  {
+    name: "shared/export-grid",
+    match: () => true, // export-grid roda em qualquer FormEntry/GridStyle
+    loader: () => import(chrome.runtime.getURL(
+      "domains/icnet/shared/export-grid.js"
+    )),
+  },
+];
+```
+
+O router percorre todas as rotas, chama `match(ctx)` e importa módulos que retornarem `true`.
+
+---
+
+## Toolbar Compartilhada
+
+- Módulos podem inserir uma **toolbar** acima de `FormEntry` (ICNET).  
+- Se já existir toolbar nativa (ex.: Organograma), os botões são anexados nela.  
+- **Idempotência:** marcar `data-cosmoware-toolbar="1"`.  
+- **Visual:** usar classes Bootstrap já carregadas; ícones Font Awesome 5.0.7 presentes no ICNET.  
+- **Fallback:** se FA não aplicar no frame, usar emoji.
+
+---
+
+## Exportação CSV (ICNET)
+
+Implementação atual:
+- Escopo: `div.FormEntry > table.GridStyle`.  
+- Assumimos **sem colspan**.  
+- Exporta:
+  - Cabeçalhos `<th>`,  
+  - Dados `<td>`,  
+  - Checkbox → `true/false`,  
+  - Links `<a>` → texto visível.  
+- Formato: UTF-8 **BOM**, **CRLF** (Excel-friendly).  
+- Nome do arquivo:  
+  `icnet-<ic>-<breadcrumb>-<yyyymmdd-hhmmss>.csv`  
+  (sempre minúsculo, sem acentos, sem espaços).  
+- Não exporta outras páginas (sem paginação incremental).  
+- Apenas uma tabela por FormEntry.
+
+---
+
+## Boas Práticas
+
+- **Chrome Web Store compliance**:
+  - Sem injeção de CSS/JS externos.  
+  - Usar libs já carregadas na página.  
+  - Não logar dados pessoais.  
+- **Idempotência**: guards globais (`window.__feature_booted`) + marcações no DOM.  
+- **Logs consistentes**: use `nsLogger` sempre.  
+- **Módulos pequenos e isolados**: uma tela, uma responsabilidade.  
+- **Facilitar colaboração IA**: código previsível, convenções estáveis.  
+
+---
+
+## Extensão para Novos Domínios
+
+Para suportar outro subdomínio:
+1. Criar `domains/<novo>/main.js`.  
+2. Criar `domains/<novo>/<novo>-utils.js` (breadcrumb, seletores locais).  
+3. Reaproveitar `core/global-rules.js` para nomes/tokens.  
+4. Implementar módulos `init(ctx)` seguindo o padrão.
+
+Essa arquitetura garante **regras globais consistentes** e **especialização local por domínio**, favorecendo evolução incremental e contribuição assistida por IA.
+</file>
+
+<file path="package.json">
+{
+  "scripts": {
+    "repomix": "repomix --output REPOMIX.md"
+  },
+  "devDependencies": {
+  }
+}
+</file>
+
+<file path="domains/icnet/main.js">
+/*****************************************************
+ * domains/icnet/main.js – Router do domínio ICNET
+ * Decide quais módulos de tela carregar (por breadcrumb/URL)
+ * Agora carrega TODAS as rotas que casarem, uma única vez por frame.
+ * Logs: [ICNET/MAIN]
+ *****************************************************/
+
+const __loadedRoutes = new Set(); // controla rotas já carregadas neste frame
+
+export async function init(context) {
+  const { utils } = context;
+  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils || {};
+  const { log, warn, error } = (nsLogger ? nsLogger("[ICNET/MAIN]") : console);
+
+  // Boot-guard por frame (evita reinicialização do router)
+  if (window.__cosmoware_icnet_main_booted) {
+    log && log("Router já bootado neste frame — ignorando re-run.");
+    return;
+  }
+  window.__cosmoware_icnet_main_booted = true;
+
+  // Rotas do domínio icnet
+  // match(ctx) → boolean, loader() → Promise<module>
+  const routes = [
+    {
+      name: "administrador/configuracao-ic/organograma",
+      match: (ctx) => {
+        try {
+          const { norm } = readBreadcrumb(ctx.doc);
+          const alvo = normalizeText("Administrador » Configuração IC » Organograma");
+          const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href); // heurística adicional
+          return (norm && norm.includes(alvo)) || hintUrl;
+        } catch {
+          return false;
+        }
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/administrador/configuracao-ic/organograma.js"
+        ))
+    },
+    {
+      // Pessoa Física » Voluntário — Organograma de Voluntários
+      name: "pessoa-fisica/voluntario/organograma-voluntarios",
+      match: (ctx) => {
+        try {
+          const { norm } = readBreadcrumb(ctx.doc);
+          const alvo = normalizeText("Pessoa Física » Voluntário");
+          const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href); // heurística adicional
+          return (norm && norm.includes(alvo)) || hintUrl;
+        } catch {
+          return false;
+        }
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
+        ))
+    },
+    {
+      // Módulo genérico: toolbar/Exportar CSV para FormEntry com GridStyle
+      name: "shared/export-grid",
+      match: (ctx) => {
+        const doc = ctx.doc;
+        return !!doc && !!doc.querySelector("div.FormEntry table.GridStyle");
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/shared/export-grid.js"
+        ))
+    },
+    // Adicione novas rotas aqui no futuro…
+  ];
+
+  log && log("Boot router icnet: avaliando rotas...");
+
+  // Processa todas as rotas que casarem; cada uma inicializa no máximo 1x por frame
+  async function processRoutes() {
+    for (const route of routes) {
+      let ok = false;
+      try {
+        ok = !!route.match?.(context);
+      } catch (e) {
+        (warn || console.warn)(`Falha ao avaliar match da rota ${route.name}:`, e);
+        ok = false;
+      }
+
+      log && log(`Rota detectada: ${route.name} | match=${ok}`);
+
+      if (!ok) continue;
+      if (__loadedRoutes.has(route.name)) {
+        log && log(`Rota ${route.name} já carregada neste frame — pulando.`);
+        continue;
+      }
+
+      try {
+        const mod = await route.loader();
+        if (typeof mod?.init !== "function") {
+          warn && warn(`Módulo ${route.name} não exporta init() — nada a fazer.`);
+          __loadedRoutes.add(route.name); // evita tentar de novo
+          continue;
+        }
+        await mod.init({ ...context, utils });
+        __loadedRoutes.add(route.name);
+        log && log(`Módulo ${route.name} inicializado.`);
+      } catch (e) {
+        (error || console.error)(`Falha ao carregar/inicializar rota ${route.name}:`, e);
+      }
+    }
+  }
+
+  // Observa mutações da página (SPA/iframe) para tentar novas rotas que passem a casar
+  const detach = attachSimpleObserver ? attachSimpleObserver(processRoutes, context.doc) : null;
+
+  // Primeira tentativa imediata
+  processRoutes();
+
+  log && log("Router icnet: processamento inicial concluído.");
+  // (Opcional) cleanup: window.addEventListener("beforeunload", detach);
+}
+</file>
+
+<file path=".gitattributes">
+# CosmoWare .gitattributes — tuned for VS Code on WSL (Windows + Linux)
+# Enforce consistent EOLs across devs and CI.
+# Default everything to LF; explicitly allow CRLF for Windows-only scripts.
+# ----------------------------------------------------------------------------
+
+# Auto-normalize text; always checkout with LF by default
+* text=auto eol=lf
+
+# --- OS-specific scripts
+*.sh   text eol=lf
+*.bash text eol=lf
+*.zsh  text eol=lf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# --- Source files / configs (force LF)
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.jsx   text eol=lf
+*.css   text eol=lf
+*.scss  text eol=lf
+*.html  text eol=lf
+*.htm   text eol=lf
+*.json  text eol=lf
+*.jsonc text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.mdx   text eol=lf
+*.svg   text eol=lf
+.editorconfig    text eol=lf
+.gitattributes   text eol=lf
+.gitignore       text eol=lf
+
+# --- Binary assets (never modify line endings)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.avif binary
+*.ico  binary
+*.bmp  binary
+*.pdf  binary
+*.zip  binary
+*.tar  binary
+*.gz   binary
+*.tgz  binary
+*.bz2  binary
+*.7z   binary
+*.rar  binary
+*.mp4  binary
+*.mov  binary
+*.webm binary
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.flac binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.crx   binary
+*.pem   binary
+
+# --- GitHub Linguist hints (repository language stats / code vs docs)
+doc/**         linguist-documentation
+docs/**        linguist-documentation
+dist/**        linguist-generated
+build/**       linguist-generated
+repomix-output.xml linguist-generated
+
+# --- Release tarball hygiene (git archive)
+.github/**     export-ignore
+.vscode/**     export-ignore
+tests/**       export-ignore
+test/**        export-ignore
+scripts/**     export-ignore
+
+# Notes:
+# - VS Code on Windows may still display CRLF by default. Set `"files.eol": "\n"`
+#   in .vscode/settings.json to keep LF in your editor as well.
+# - Lockfiles: we keep defaults (no custom merge strategy) to avoid broken installs.
 </file>
 
 <file path="DEVELOPMENT.md">
@@ -1344,6 +2020,8 @@ Este documento é o guia prático para contribuir no desenvolvimento do CosmoWar
 - Garantir **idempotência** (não duplicar UI).
 - Usar apenas `ctx.utils`.
 - Manter logs claros e com namespace fixo.
+- Aproveitar a barra de ferramentas para adicionar botoes quando no icnet
+- Desenvolvimento incremental, certifica-se que uma versão com logs esteja funcionando, que os requisitos estão corretos e depois implementa a funcionalidade.
 - Inserir UI discreta, sem interferir em outras telas.
 
 ### Template mínimo
@@ -1443,18 +2121,25 @@ Veja `AI_GUIDE.md` para instruções detalhadas de prompts.
 <file path="manifest.json">
 {
   "manifest_version": 3,
-  "name": "Conscienciologia Tools",
+  "name": "Conscienciologia Tools (CosmoWare)",
   "version": "0.4.0",
   "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
-  "permissions": ["scripting", "activeTab"],
+  "permissions": [
+    "scripting",
+    "activeTab"
+  ],
   "host_permissions": [
     "https://*.conscienciologia.org.br/*",
     "https://kroki.io/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.conscienciologia.org.br/*"],
-      "js": ["core/content.js"],
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ],
+      "js": [
+        "core/content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
@@ -1463,23 +2148,24 @@ Veja `AI_GUIDE.md` para instruções detalhadas de prompts.
     {
       "resources": [
         "core/utils.js",
+        "core/global-rules.js",
         "domains/*/main.js",
         "domains/*/*.js",
+        "domains/icnet/styles.css",
+        "domains/icnet/shared/export-grid.js",
+        "domains/icnet/icnet-utils.js",
         "domains/*/**/*.js",
         "domains/*/**/**/*.js"
       ],
-      "matches": ["https://*.conscienciologia.org.br/*"]
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ]
     }
-  ]
-}
-</file>
-
-<file path="package.json">
-{
-  "scripts": {
-    "repomix": "repomix --output REPOMIX.md"
-  },
-  "devDependencies": {
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }
 </file>
@@ -1505,8 +2191,13 @@ jobs:
         with:
           fetch-depth: 0  # precisamos do histórico para tag/changelog
 
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zip
+
       - name: Compute date-based version (YY.MM.DD.<ms>)
-        id: ver
+        id: calc_ver
         shell: bash
         run: |
           DATE=$(date -u +'%y.%m.%d')
@@ -1515,12 +2206,15 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Computed version: ${VERSION}"
 
+      - name: Make build script executable
+        run: chmod +x scripts/build-zip.sh
+
       - name: Update manifest.json (if present)
         shell: bash
         run: |
           if [ -f manifest.json ]; then
-            echo "Updating manifest.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+            echo "Updating manifest.json to version ${{ steps.calc_ver.outputs.version }}"
+            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
           else
             echo "manifest.json not found. Skipping."
           fi
@@ -1529,8 +2223,8 @@ jobs:
         shell: bash
         run: |
           if [ -f package.json ]; then
-            echo "Updating package.json to version ${{ steps.ver.outputs.version }}"
-            jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
+            echo "Updating package.json to version ${{ steps.calc_ver.outputs.version }}"
+            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
           else
             echo "package.json not found. Skipping."
           fi
@@ -1542,18 +2236,63 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "chore(release): v${{ steps.ver.outputs.version }}"
+            git commit -m "chore(release): v${{ steps.calc_ver.outputs.version }} [skip ci]"
           else
             echo "No file changes to commit."
           fi
 
-      - name: Create tag
-        shell: bash
+      - name: Read updated version from manifest.json
+        id: ver
         run: |
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin "v${{ steps.ver.outputs.version }}" || {
-            echo "Tag push failed (maybe tag exists)."
-          }
+          VERSION="$(jq -r '.version' manifest.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "manifest.json.version não encontrado"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versão (atualizada): $VERSION"
+
+      - name: Build ZIP
+        run: ./scripts/build-zip.sh
+
+      - name: Locate ZIP built
+        id: zip
+        run: |
+          ZIP_PATH="dist/cosmoware-extension-v${{ steps.ver.outputs.version }}.zip"
+          if [ ! -f "$ZIP_PATH" ]; then
+            # fallback: tenta qualquer .zip em dist/
+            ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -n1 || true)
+          fi
+          if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
+            echo "Nenhum .zip encontrado em dist/"; exit 1
+          fi
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "ZIP localizado: $ZIP_PATH"
+
+      - name: Generate SHA256 (if missing)
+        id: sha
+        run: |
+          SHA_PATH="${{ steps.zip.outputs.zip_path }}.sha256"
+          if [ ! -f "$SHA_PATH" ]; then
+            sha256sum "${{ steps.zip.outputs.zip_path }}" | awk '{print $1}' > "$SHA_PATH"
+          fi
+          echo "sha_path=$SHA_PATH" >> "$GITHUB_OUTPUT"
+          echo "SHA gerado/em uso: $SHA_PATH"
+
+      - name: Upload artifact (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip
+          path: ${{ steps.zip.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload artifact (SHA256)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip.sha256
+          path: ${{ steps.sha.outputs.sha_path }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Generate changelog since last tag
         id: changelog
@@ -1585,17 +2324,29 @@ jobs:
           mv tmp.md CHANGELOG.md
           if ! git diff --quiet; then
             git add CHANGELOG.md
-            git commit -m "docs(changelog): update for ${VERSION}"
+            git commit -m "docs(changelog): update for ${VERSION} [skip ci]"
+            git push origin HEAD:main || true
           else
             echo "No changes to CHANGELOG.md."
           fi
 
-      - name: Create GitHub Release
+      - name: Create tag
+        shell: bash
+        run: |
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin "v${{ steps.ver.outputs.version }}" || {
+            echo "Tag push failed (maybe tag exists)."
+          }
+
+      - name: Create GitHub Release (with assets)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.ver.outputs.version }}"
           name: "v${{ steps.ver.outputs.version }}"
           body_path: "${{ steps.changelog.outputs.body_path }}"
+          files: |
+            ${{ steps.zip.outputs.zip_path }}
+            ${{ steps.sha.outputs.sha_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
@@ -1614,7 +2365,7 @@ jobs:
 - Sempre inicie colando o **`REPOMIX.md` atualizado** no chat da IA (ou forneça o link, se o modelo suportar).  
 - Depois acrescente um **Brief estruturado** da funcionalidade desejada (veja abaixo).  
 - Se o `REPOMIX.md` for muito grande para o modelo:
-  - Use apenas os trechos mais relevantes (ex.: `core/utils.js`, `domains/<domínio>/main.js`, exemplos próximos ao que você quer implementar).  
+  - Use apenas os trechos mais relevantes (ex.: `core/utils.js`, `core/global-rules.js`, `domains/<domínio>/main.js`, exemplos próximos ao que você quer implementar).  
   - Sempre acrescente o Brief.  
 
 Assim a IA entende o **contexto global** (arquitetura e convenções) e também o **objetivo específico** (Brief).
@@ -1628,12 +2379,16 @@ Assim a IA entende o **contexto global** (arquitetura e convenções) e também 
 ## 2) Workflow IA-first
 
 1. **Obtenha contexto**  
-   - Gere o `REPOMIX.md` local (`npx repomix`) ou use o do repositório (atualizado pelo CI).  
-   - Cole o conteúdo no chat da IA.  
+   - Use o `REPOMIX.md` atualizado pelo CI.  
+   - Cole no chat da IA.  
 
 2. **Escreva o Brief da funcionalidade** (template abaixo).  
 
-3. **Use o Prompt Base de Geração de Módulo**.  
+3. **Conduza prompts incrementais**:  
+   - Etapa 1: IA revisa o Brief, sugere ajustes e confirma entendimento.  
+   - Etapa 2: IA gera versão **mínima com logs** (somente toolbar e botões, sem lógica pesada).  
+   - Etapa 3: Você testa manualmente (console/logs).  
+   - Etapa 4: IA adiciona funcionalidades reais (CSV, Kroki, etc.).  
 
 4. **Teste manualmente** a extensão.  
 
@@ -1654,29 +2409,30 @@ Assim a IA entende o **contexto global** (arquitetura e convenções) e também 
 - URL(s) típica(s): https://icnet.conscienciologia.org.br/main.aspx#
 
 ## Objetivo
-Ex.: Extrair tabela de voluntários e gerar WBS PlantUML via Kroki com toolbar (Gerar Imagem / Formato / Baixar).
+Ex.: Exportar tabela de voluntários em CSV.
 
 ## Entradas da página (amostra real de HTML)
 Cole trechos relevantes:
 - Breadcrumb (#TbPathAndNavigation #lbPath)
-- Tabela (#Grid1)
+- Div FormEntry + tabela GridStyle
 - Exemplo de linhas relevantes
 
 ## Resultado Esperado
-- Toolbar discreta antes da tabela com botões: Gerar Imagem, Formato (PNG|SVG), Baixar
-- Geração de imagem e link de download
-- Nome do arquivo: <IC>-voluntarios-<timestamp>.png|svg
+- Toolbar antes da tabela com botão: Exportar (ícone CSV)
+- Exporta tabela inteira para CSV (UTF-8 BOM, CRLF)
+- Nome do arquivo: icnet-<ic>-<breadcrumb>-<timestamp>.csv
 
 ## Critérios de Aceitação
 - Só atua quando breadcrumb = “Pessoa Física » Voluntário”
 - Não duplica UI (idempotência)
-- Logs com prefixo [ICNET/PF-VOL]
+- Logs com prefixo [ICNET/EXPORT]
 - Erros tratados no console de forma clara
 - Compatível com iframes
 
 ## Observações
-- Usar ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact)
+- Usar ctx.utils e regras globais (global-rules.js)
 - IDs/Classes com prefixo cosmoware-
+- Testar primeiro com logs, depois gerar CSV de fato
 ```
 
 ---
@@ -1686,17 +2442,19 @@ Cole trechos relevantes:
 ```
 Você é um assistente desenvolvedor do projeto CosmoWare. 
 Considere **todo o contexto em REPOMIX.md** e o seguinte **Brief** (abaixo). 
-Gere um **módulo ES Module** que exporte `export async function init(ctx) { ... }`, 
-e siga estes requisitos:
+Vamos implementar de forma incremental:
 
+1. Primeiro, confirme entendimento do Brief e sugira ajustes.  
+2. Depois, gere versão mínima com logs (toolbar, botão, console.log).  
+3. Após testes manuais, avance para versão completa (ex.: exportar CSV).
+
+Regras:
 - Estrutura: domains/<subdomínio>/<rota>/<nome>.js
-- Independente (não importa outra feature)
-- Use apenas ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact)
+- Use apenas ctx.utils (nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver, krokiPlantUmlToPng, krokiPlantUmlToSvg, timeStampCompact, regras globais)
 - Valide breadcrumb antes de atuar
 - Idempotência (não duplicar UI)
-- Logs com namespace fixo (ex.: [ICNET/ORG])
+- Logs com namespace fixo (ex.: [ICNET/EXPORT])
 - IDs/classes com prefixo cosmoware-
-- Comente trechos críticos (por que do observer, throttling, etc.)
 ```
 
 ---
@@ -1711,149 +2469,57 @@ seguindo o padrão do projeto:
 - `match(ctx)`: verificação do breadcrumb (use normalizeText só para comparar)
 - `loader()`: import dinâmico via chrome.runtime.getURL
 
-Além do snippet, diga onde colar e gere checklist de testes manuais.  
-Breadcrumb alvo: "Pessoa Física » Voluntário".
+Inclua também checklist de testes manuais para validar a rota.
 ```
 
 ---
 
-## 6) **Erros comuns e como evitar** (lições aprendidas)
+## 6) **Erros comuns e como evitar**
 
-### 6.1 nsLogger — API correta
-- **Certo**:  
-  ```js
-  const { log, warn, error } = nsLogger("[ICNET/PF-VOL]");
-  log("mensagem");
-  ```
-- **Errado**: tratar o retorno como função única (`ns("...")`).  
-- Sempre padronize o namespace entre colchetes, ex.: `[ICNET/PF-VOL]`.
+### nsLogger
+- Sempre crie com namespace fixo: `[ICNET/FEATURE]`.
 
-### 6.2 normalizeText — quando usar
-- Use **somente** para **comparações** (ex.: breadcrumb).  
-- **Nunca** normalize textos de **exibição** (nomes, rótulos) — preserve capitalização original.  
-- Garanta que a entrada de `normalizeText` seja **string**.
+### normalizeText
+- Use somente para comparações. Nunca normalize textos exibidos.
 
-### 6.3 readBreadcrumb — alvo exato
-- Compare com a **string normalizada exata** do alvo.  
-  ```js
-  const alvo = normalizeText("Pessoa Física » Voluntário");
-  const ok = readBreadcrumb(document).norm === alvo;
-  ```
+### Breadcrumbs
+- Cada domínio pode ter **estrutura diferente**.  
+- ICNet: use último breadcrumb (`#TbPathAndNavigation #lbPath`).  
+- Outros domínios terão regras próprias (coloque em `<domínio>-utils.js`).  
 
-### 6.4 attachSimpleObserver — assinatura e loops
-- Assinatura: `attachSimpleObserver(callback, nodeOuDocument)`.  
-- **Evite loops**: o observer não deve disparar **geraçōes caras** (ex.: chamar Kroki) automaticamente.  
-  - Preferir: marcar “sujo” ou **não gerar nada** — gerar **apenas** com ação explícita do usuário (botão).
+### Idempotência
+- Use guards globais e atributos `data-cosmoware-*`.  
 
-### 6.5 Idempotência de UI
-- Antes de inserir toolbar/preview, **verifique** por `#cosmoware-...`.  
-- Nunca re-anexar listeners se o elemento já existe.
+### Toolbar
+- Sempre discreta, idempotente, à esquerda.  
+- Reaproveite libs já carregadas no frame (Bootstrap, Font Awesome).  
+- Se ícones não carregarem → fallback em emoji.
 
-### 6.6 PlantUML WBS — estilo e estereótipos
-- **Estilo correto** (WBS usa classes dentro de `wbsDiagram`):
-  ```plantuml
-  <style>
-  wbsDiagram {
-    .ativo   { BackgroundColor PaleGreen }
-    .inativo { BackgroundColor LightGray }
-  }
-  </style>
-  ```
-- Use estereótipo nos nós: `<<ativo>>` / `<<inativo>>`.  
-- **Não** use `.stereotype("...")` no WBS.
+### Arquivos gerados
+- Sempre use `core/global-rules.js` para normalizar nomes.  
+- Formato: `<domínio>-<ic>-<breadcrumb>-<timestamp>.<ext>`  
+- Tokens: minúsculos, sem acentos, `_` como separador.
 
-### 6.7 Raiz condicional “Voluntários”
-- Se houver **apenas um** nível raiz (ex.: “Colegiado Administrativo”), **omite** “Voluntários” e use esse nível como `*`.  
-- Se houver **mais de um** topo, inclua “* Voluntários”.
-
-### 6.8 Capitalização
-- Preserve os textos do DOM como vieram para labels do diagrama.  
-- Para ordenar, você pode usar `localeCompare`, mas **não** altere o case exibido.
-
-### 6.9 Geração sob demanda (UX)
-- **Não** gere a imagem ao carregar a página nem ao detectar mutações.  
-- Use **um botão único**: “🖼️ Gerar Imagem”.  
-- Depois de gerar, habilite “Baixar imagem”.
-
-### 6.10 Persistência de preferências (localStorage)
-- Chave **versionada**: `cosmoware_pfvol_prefs_v1`.  
-- Estrutura mínima: `{ fmt: "png" | "svg" }`.  
-- Mescle com defaults ao carregar (`{ ...base, ...parsed }`).
-
-### 6.11 Funções utilitárias — existência e fallback
-- Antes de usar um util, verifique se existe:
-  ```js
-  if (typeof krokiPlantUmlToSvg === "function") { ... } else { /* fallback */ }
-  ```
-- SVG indisponível → **fallback para PNG**, com `warn`.
-
-### 6.12 Download e preview
-- Habilite download **após** gerar: defina `href` e `download`.  
-- Trate `Blob`, `ArrayBuffer` e **data URI**.  
-- Se recriar URLs, considere `URL.revokeObjectURL` do anterior.
-
-### 6.13 Segurança e privacidade
-- Não logue dados pessoais sensíveis.  
-- Os diagramas enviados ao Kroki devem conter **apenas** o texto necessário.
+### CSV (ICNet)
+- Escopo: apenas `div.FormEntry > table.GridStyle`.  
+- Sem suporte a `colspan`.  
+- Apenas uma tabela por FormEntry.  
+- UTF-8 BOM + CRLF.  
 
 ---
 
-## 7) Snippet de toolbar (alinhado à esquerda)
+## 7) Snippet de toolbar (mínima com logs)
 
 ```js
-// Layout: [🖼️ Gerar Imagem] [Formato: (PNG|SVG)] [Baixar imagem] [status]
-const toolbar = document.createElement("div");
-toolbar.id = "cosmoware-pf-vol-toolbar";
-toolbar.className = "cosmoware-toolbar";
-Object.assign(toolbar.style, {
-  display: "flex",
-  gap: "10px",
-  alignItems: "center",
-  justifyContent: "flex-start",
-  flexWrap: "wrap",
-  margin: "8px 0",
-  padding: "6px 8px",
-  border: "1px solid #ddd",
-  borderRadius: "6px",
-  background: "#fafafa",
-  fontSize: "12px",
-});
+const bar = document.createElement("div");
+bar.className = "cosmoware-toolbar";
+bar.textContent = "Toolbar CosmoWare — Modo mínimo (logs)";
+console.log("[ICNET/EXPORT] toolbar criada");
 ```
-
-- **Botão “Gerar Imagem”** dispara toda a cadeia (coleta → WBS → Kroki → preview → download).  
-- **Select Formato** persiste em `localStorage`.  
-- **“Baixar imagem”** inicia **desabilitado** e só é habilitado após a geração.
 
 ---
 
-## 8) Exemplo de WBS correto (com raiz condicional)
-
-```plantuml
-@startwbs
-<style>
-wbsDiagram {
-  .ativo   { BackgroundColor PaleGreen }
-  .inativo { BackgroundColor LightGray }
-}
-</style>
-* Colegiado Administrativo
-** Relações Institucionais
-*** Nome (Função) <<ativo>>
-@endwbs
-```
-
-> Observação: se houver mais de um nível topo, use:
->
-> ```
-> * Voluntários
-> ** Colegiado Administrativo
-> ** Outro Topo
-> ...
-> ```
-
----
-
-## 9) Checklist de Aceitação
+## 8) Checklist de Aceitação
 
 - [ ] Atua somente na tela correta (breadcrumb igual ao alvo)  
 - [ ] Não duplica UI (idempotência)  
@@ -1862,64 +2528,21 @@ wbsDiagram {
 - [ ] Compatível com iframes  
 - [ ] Arquivo em `domains/<domínio>/<rota>/<feature>.js`  
 - [ ] Rota registrada em `domains/<domínio>/main.js`  
-- [ ] Geração **apenas** via botão “Gerar Imagem”  
-- [ ] Formato (PNG/SVG) **persistente** via `localStorage`  
-- [ ] WBS com **estilo correto** e **estereótipos**  
-- [ ] Raiz “Voluntários” **condicional**  
-- [ ] Testado manualmente (preview + download)  
+- [ ] Funciona incrementalmente (primeiro logs, depois funcionalidade completa)  
+- [ ] Nome de arquivos normalizado pelas regras globais  
+- [ ] Testado manualmente (console + UI)  
 - [ ] Prompt usado documentado no PR  
 
 ---
 
-## 10) Dicas de HTML no Prompt
+## 9) Exemplos no Repositório
 
-- Copie trechos reais do DOM (breadcrumb, tabela, botões).  
-- Inclua variações (linhas pares/ímpares).  
-- Informe se há iframes.  
-
----
-
-## 11) Prompts auxiliares
-
-**Refatorar para padrão CosmoWare**
-```
-Reescreva este módulo para o padrão CosmoWare:
-- exporta init(ctx)
-- usa apenas ctx.utils
-- logs com nsLogger
-- idempotência
-- comentários críticos
-[cole código aqui]
-```
-
-**Gerar descrição de PR**
-```
-Gere descrição de PR no padrão CosmoWare:
-- O que foi feito
-- Prints
-- Logs esperados
-- Checklist
-```
-**Changelog curto**
-```
-Gere changelog curto no formato semântico (feat, fix, chore).
-```
-
----
-
-## 12) Segurança
-
-- Nunca logar dados pessoais sensíveis  
-- Usar Kroki apenas para texto de diagrama  
-- Se houver dados sensíveis → mascarar/remover e documentar no PR  
-
----
-
-## 13) Exemplos no Repositório
-
+- `domains/icnet/shared/export-grid.js` (mínimo com logs → CSV)  
 - `domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js`  
 - `domains/icnet/main.js`  
 - `core/utils.js`  
+- `core/global-rules.js`  
+- `domains/icnet/icnet-utils.js`
 
 > Estes arquivos estão sempre no `REPOMIX.md` e servem como exemplos.
 </file>
