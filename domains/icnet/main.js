@@ -1,15 +1,23 @@
 /*****************************************************
  * domains/icnet/main.js – Router do domínio ICNET
- * Decide qual módulo de tela carregar (por breadcrumb/URL)
+ * Decide quais módulos de tela carregar (por breadcrumb/URL)
+ * Agora carrega TODAS as rotas que casarem, uma única vez por frame.
  * Logs: [ICNET/MAIN]
  *****************************************************/
+
+const __loadedRoutes = new Set(); // controla rotas já carregadas neste frame
+
 export async function init(context) {
   const { utils } = context;
-  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils;
-  const { log, warn } = nsLogger("[ICNET/MAIN]");
+  const { nsLogger, normalizeText, readBreadcrumb, attachSimpleObserver } = utils || {};
+  const { log, warn, error } = (nsLogger ? nsLogger("[ICNET/MAIN]") : console);
 
-  if (window.__ct_icnet_main_loaded) return;
-  window.__ct_icnet_main_loaded = true;
+  // Boot-guard por frame (evita reinicialização do router)
+  if (window.__cosmoware_icnet_main_booted) {
+    log && log("Router já bootado neste frame — ignorando re-run.");
+    return;
+  }
+  window.__cosmoware_icnet_main_booted = true;
 
   // Rotas do domínio icnet
   // match(ctx) → boolean, loader() → Promise<module>
@@ -17,11 +25,14 @@ export async function init(context) {
     {
       name: "administrador/configuracao-ic/organograma",
       match: (ctx) => {
-        const { norm } = readBreadcrumb(ctx.doc);
-        const alvo = normalizeText("Administrador » Configuração IC » Organograma");
-        // Heurística adicional (opcional): f=1028 no URL
-        const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href);
-        return norm.includes(alvo) || hintUrl;
+        try {
+          const { norm } = readBreadcrumb(ctx.doc);
+          const alvo = normalizeText("Administrador » Configuração IC » Organograma");
+          const hintUrl = /[?&#](f|functionkey)=1028\b/i.test(ctx.href); // heurística adicional
+          return (norm && norm.includes(alvo)) || hintUrl;
+        } catch {
+          return false;
+        }
       },
       loader: () =>
         import(chrome.runtime.getURL(
@@ -29,65 +40,81 @@ export async function init(context) {
         ))
     },
     {
-    // Pessoa Física » Voluntário — Organograma de Voluntários
-    name: "pessoa-fisica/voluntario/organograma-voluntarios",
-    match: (ctx) => {
+      // Pessoa Física » Voluntário — Organograma de Voluntários
+      name: "pessoa-fisica/voluntario/organograma-voluntarios",
+      match: (ctx) => {
         try {
-        // readBreadcrumb retorna objeto { raw, norm, ... } no seu router
-        const { norm } = readBreadcrumb(ctx.doc);
-        const alvo = normalizeText("Pessoa Física » Voluntário");
-
-        // Heurística adicional: rota também casa por ?f=29
-        const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href);
-
-        // Mais tolerante: 'includes' em vez de igualdade estrita
-        return (norm && norm.includes(alvo)) || hintUrl;
+          const { norm } = readBreadcrumb(ctx.doc);
+          const alvo = normalizeText("Pessoa Física » Voluntário");
+          const hintUrl = /[?&#](f|functionkey)=29\b/i.test(ctx.href); // heurística adicional
+          return (norm && norm.includes(alvo)) || hintUrl;
         } catch {
-        return false;
+          return false;
         }
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
+        ))
     },
-    loader: () =>
-        import(
-        chrome.runtime.getURL(
-            "domains/icnet/pessoa-fisica/voluntario/organograma-voluntarios.js"
-        )
-        )
-    }
-
-
-    // Adicione novas rotas aqui no futuro
+    {
+      // Módulo genérico: toolbar/Exportar CSV para FormEntry com GridStyle
+      name: "shared/export-grid",
+      match: (ctx) => {
+        const doc = ctx.doc;
+        return !!doc && !!doc.querySelector("div.FormEntry table.GridStyle");
+      },
+      loader: () =>
+        import(chrome.runtime.getURL(
+          "domains/icnet/shared/export-grid.js"
+        ))
+    },
+    // Adicione novas rotas aqui no futuro…
   ];
 
-  let bootedOnce = false;
+  log && log("Boot router icnet: avaliando rotas...");
 
-  async function tryRoute() {
-    if (bootedOnce) return;
-    const route = routes.find(r => {
-      try { return r.match(context); } catch { return false; }
-    });
-    if (!route) return;
-
-    log("Rota detectada:", route.name);
-    try {
-      const mod = await route.loader();
-      if (typeof mod?.init !== "function") {
-        warn(`Módulo ${route.name} não exporta init()`);
-        return;
+  // Processa todas as rotas que casarem; cada uma inicializa no máximo 1x por frame
+  async function processRoutes() {
+    for (const route of routes) {
+      let ok = false;
+      try {
+        ok = !!route.match?.(context);
+      } catch (e) {
+        (warn || console.warn)(`Falha ao avaliar match da rota ${route.name}:`, e);
+        ok = false;
       }
-      await mod.init({ ...context, utils });
-      bootedOnce = true;
-      log(`Módulo ${route.name} inicializado.`);
-    } catch (e) {
-      console.error("[ICNET/MAIN]", "Falha ao carregar módulo:", route.name, e);
+
+      log && log(`Rota detectada: ${route.name} | match=${ok}`);
+
+      if (!ok) continue;
+      if (__loadedRoutes.has(route.name)) {
+        log && log(`Rota ${route.name} já carregada neste frame — pulando.`);
+        continue;
+      }
+
+      try {
+        const mod = await route.loader();
+        if (typeof mod?.init !== "function") {
+          warn && warn(`Módulo ${route.name} não exporta init() — nada a fazer.`);
+          __loadedRoutes.add(route.name); // evita tentar de novo
+          continue;
+        }
+        await mod.init({ ...context, utils });
+        __loadedRoutes.add(route.name);
+        log && log(`Módulo ${route.name} inicializado.`);
+      } catch (e) {
+        (error || console.error)(`Falha ao carregar/inicializar rota ${route.name}:`, e);
+      }
     }
   }
 
-  // Observa mutações da página (SPA/iframe) para tentar casar a rota
-  const detach = attachSimpleObserver(tryRoute, context.doc);
+  // Observa mutações da página (SPA/iframe) para tentar novas rotas que passem a casar
+  const detach = attachSimpleObserver ? attachSimpleObserver(processRoutes, context.doc) : null;
 
   // Primeira tentativa imediata
-  tryRoute();
+  processRoutes();
 
-  // Cleanup automático quando necessário? (opcional)
-  // window.addEventListener("beforeunload", detach);
+  log && log("Router icnet: processamento inicial concluído.");
+  // (Opcional) cleanup: window.addEventListener("beforeunload", detach);
 }

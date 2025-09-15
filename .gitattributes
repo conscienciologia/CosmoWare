@@ -1,15 +1,88 @@
-# Use line endings do sistema operacional local
-* text=auto
+# CosmoWare .gitattributes — tuned for VS Code on WSL (Windows + Linux)
+# Enforce consistent EOLs across devs and CI.
+# Default everything to LF; explicitly allow CRLF for Windows-only scripts.
+# ----------------------------------------------------------------------------
 
-# Scripts shell sempre LF
-*.sh text eol=lf
+# Auto-normalize text; always checkout with LF by default
+* text=auto eol=lf
 
-# Batch/PowerShell sempre CRLF
-*.bat text eol=crlf
-*.ps1 text eol=crlf
+# --- OS-specific scripts
+*.sh   text eol=lf
+*.bash text eol=lf
+*.zsh  text eol=lf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
 
-# JSON, YAML, MD, etc. forçar LF (para CI/CD não quebrar)
-*.yml text eol=lf
-*.yaml text eol=lf
-*.json text eol=lf
-*.md text eol=lf
+# --- Source files / configs (force LF)
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.jsx   text eol=lf
+*.css   text eol=lf
+*.scss  text eol=lf
+*.html  text eol=lf
+*.htm   text eol=lf
+*.json  text eol=lf
+*.jsonc text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.mdx   text eol=lf
+*.svg   text eol=lf
+.editorconfig    text eol=lf
+.gitattributes   text eol=lf
+.gitignore       text eol=lf
+
+# --- Binary assets (never modify line endings)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.avif binary
+*.ico  binary
+*.bmp  binary
+*.pdf  binary
+*.zip  binary
+*.tar  binary
+*.gz   binary
+*.tgz  binary
+*.bz2  binary
+*.7z   binary
+*.rar  binary
+*.mp4  binary
+*.mov  binary
+*.webm binary
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.flac binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.crx   binary   # Chrome extension package
+*.pem   binary   # private key when packing locally (do not commit)
+
+# --- GitHub Linguist hints (repository language stats / code vs docs)
+doc/**         linguist-documentation
+docs/**        linguist-documentation
+dist/**        linguist-generated
+build/**       linguist-generated
+repomix-output.xml linguist-generated
+
+# --- Release tarball hygiene (git archive)
+.github/**     export-ignore
+.vscode/**     export-ignore
+tests/**       export-ignore
+test/**        export-ignore
+scripts/**     export-ignore
+
+# Notes:
+# - VS Code on Windows may still display CRLF by default. Set `"files.eol": "\n"`
+#   in .vscode/settings.json to keep LF in your editor as well.
+# - Lockfiles: we keep defaults (no custom merge strategy) to avoid broken installs.

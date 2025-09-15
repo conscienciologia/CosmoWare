@@ -1,0 +1,12 @@
+/* domains/icnet/styles.css */
+/* CSS mínimo para complementar Bootstrap (mantendo visual clean) */
+.cosmoware-toolbar {
+  background: #fff;
+}
+.cosmoware-toolbar .cosmoware-btn i {
+  margin-right: 6px;
+}
+/* Opcional: ajuste de espaçamento entre elementos quando Bootstrap não resolver */
+.cosmoware-toolbar .gap-2 > * + * {
+  margin-left: .5rem;
+}

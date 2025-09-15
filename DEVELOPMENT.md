@@ -59,6 +59,8 @@ Este documento é o guia prático para contribuir no desenvolvimento do CosmoWar
 - Garantir **idempotência** (não duplicar UI).
 - Usar apenas `ctx.utils`.
 - Manter logs claros e com namespace fixo.
+- Aproveitar a barra de ferramentas para adicionar botoes quando no icnet
+- Desenvolvimento incremental, certifica-se que uma versão com logs esteja funcionando, que os requisitos estão corretos e depois implementa a funcionalidade.
 - Inserir UI discreta, sem interferir em outras telas.
 
 ### Template mínimo

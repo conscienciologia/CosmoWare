@@ -1,1 +1,81 @@
-./repomix-output.xml
+# CosmoWare — sensible defaults for a Chrome Extension repo
+# ----------------------------------------------------------------------------
+# OS / Filesystem
+.DS_Store
+Thumbs.db
+
+# Editors / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+
+# Node & package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+.eslintcache
+.stylelintcache
+
+# Lockfiles:
+# 👉 Recommended: commit exactly one lockfile (npm, yarn or pnpm).
+#    If you intentionally don't use a lockfile, uncomment the line below.
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Builds / Artifacts
+dist/
+build/
+coverage/
+*.coverage
+*.lcov
+
+# Bundlers / Caches
+.parcel-cache/
+.rollup.cache/
+.esbuild/
+.turbo/
+.cache/
+webpack-stats.json
+.next/
+.nuxt/
+.svelte-kit/
+
+# Chrome Extension packaging
+*.crx
+*.pem            # private key generated when packing locally
+*.zip            # release zips are attached in GitHub Releases, not committed
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files
+tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Logs
+*.log
+logs/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# RepoMix (keep REPOMIX.md tracked; ignore only the output file)
+repomix-output.xml
+
+# OS-specific trash
+*.Trash
+ehthumbs.db
+Icon?
