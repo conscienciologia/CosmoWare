@@ -2170,187 +2170,6 @@ Veja `AI_GUIDE.md` para instruções detalhadas de prompts.
 }
 </file>
 
-<file path=".github/workflows/release.yml">
-name: Release
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-permissions:
-  contents: write  # criar tags, commits e releases
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # precisamos do histórico para tag/changelog
-
-      - name: Install tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq zip
-
-      - name: Compute date-based version (YY.MM.DD.<ms>)
-        id: calc_ver
-        shell: bash
-        run: |
-          DATE=$(date -u +'%y.%m.%d')
-          TS=$(date -u +%s%3N)   # timestamp em milissegundos (UTC)
-          VERSION="${DATE}.${TS}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Computed version: ${VERSION}"
-
-      - name: Make build script executable
-        run: chmod +x scripts/build-zip.sh
-
-      - name: Update manifest.json (if present)
-        shell: bash
-        run: |
-          if [ -f manifest.json ]; then
-            echo "Updating manifest.json to version ${{ steps.calc_ver.outputs.version }}"
-            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-          else
-            echo "manifest.json not found. Skipping."
-          fi
-
-      - name: Update package.json (if present)
-        shell: bash
-        run: |
-          if [ -f package.json ]; then
-            echo "Updating package.json to version ${{ steps.calc_ver.outputs.version }}"
-            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
-          else
-            echo "package.json not found. Skipping."
-          fi
-
-      - name: Commit version bumps (if any)
-        shell: bash
-        run: |
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(release): v${{ steps.calc_ver.outputs.version }} [skip ci]"
-          else
-            echo "No file changes to commit."
-          fi
-
-      - name: Read updated version from manifest.json
-        id: ver
-        run: |
-          VERSION="$(jq -r '.version' manifest.json)"
-          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "manifest.json.version não encontrado"; exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Versão (atualizada): $VERSION"
-
-      - name: Build ZIP
-        run: ./scripts/build-zip.sh
-
-      - name: Locate ZIP built
-        id: zip
-        run: |
-          ZIP_PATH="dist/cosmoware-extension-v${{ steps.ver.outputs.version }}.zip"
-          if [ ! -f "$ZIP_PATH" ]; then
-            # fallback: tenta qualquer .zip em dist/
-            ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -n1 || true)
-          fi
-          if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
-            echo "Nenhum .zip encontrado em dist/"; exit 1
-          fi
-          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
-          echo "ZIP localizado: $ZIP_PATH"
-
-      - name: Generate SHA256 (if missing)
-        id: sha
-        run: |
-          SHA_PATH="${{ steps.zip.outputs.zip_path }}.sha256"
-          if [ ! -f "$SHA_PATH" ]; then
-            sha256sum "${{ steps.zip.outputs.zip_path }}" | awk '{print $1}' > "$SHA_PATH"
-          fi
-          echo "sha_path=$SHA_PATH" >> "$GITHUB_OUTPUT"
-          echo "SHA gerado/em uso: $SHA_PATH"
-
-      - name: Upload artifact (ZIP)
-        uses: actions/upload-artifact@v4
-        with:
-          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip
-          path: ${{ steps.zip.outputs.zip_path }}
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload artifact (SHA256)
-        uses: actions/upload-artifact@v4
-        with:
-          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip.sha256
-          path: ${{ steps.sha.outputs.sha_path }}
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Generate changelog since last tag
-        id: changelog
-        shell: bash
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LAST_TAG" ]; then
-            echo "Last tag: $LAST_TAG"
-            echo "## Changes since $LAST_TAG" > body.md
-            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
-          else
-            echo "No previous tag. Listing all commits."
-            echo "## Initial Release Notes" > body.md
-            git log --pretty=format:'- %s (%h)' >> body.md
-          fi
-          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
-
-      - name: Update CHANGELOG.md
-        shell: bash
-        run: |
-          VERSION="v${{ steps.ver.outputs.version }}"
-          DATE=$(date -u +'%Y-%m-%d')
-          echo "### ${VERSION} - ${DATE}" > tmp.md
-          cat body.md >> tmp.md
-          echo "" >> tmp.md
-          if [ -f CHANGELOG.md ]; then
-            cat CHANGELOG.md >> tmp.md
-          fi
-          mv tmp.md CHANGELOG.md
-          if ! git diff --quiet; then
-            git add CHANGELOG.md
-            git commit -m "docs(changelog): update for ${VERSION} [skip ci]"
-            git push origin HEAD:main || true
-          else
-            echo "No changes to CHANGELOG.md."
-          fi
-
-      - name: Create tag
-        shell: bash
-        run: |
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin "v${{ steps.ver.outputs.version }}" || {
-            echo "Tag push failed (maybe tag exists)."
-          }
-
-      - name: Create GitHub Release (with assets)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ steps.ver.outputs.version }}"
-          name: "v${{ steps.ver.outputs.version }}"
-          body_path: "${{ steps.changelog.outputs.body_path }}"
-          files: |
-            ${{ steps.zip.outputs.zip_path }}
-            ${{ steps.sha.outputs.sha_path }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-</file>
-
 <file path="AI_GUIDE.md">
 # AI Guide — Como usar IA para criar e manter funcionalidades do CosmoWare
 
@@ -2545,6 +2364,201 @@ console.log("[ICNET/EXPORT] toolbar criada");
 - `domains/icnet/icnet-utils.js`
 
 > Estes arquivos estão sempre no `REPOMIX.md` e servem como exemplos.
+</file>
+
+<file path=".github/workflows/release.yml">
+name: Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # criar tags, commits e releases
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # precisamos do histórico para tag/changelog
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zip
+
+      - name: Compute date-based version (YY.M.D.HHMM)
+        id: calc_ver
+        shell: bash
+        run: |
+          # Year (two-digits) without leading zeros handled as integer
+          Y_RAW=$(date -u +%y)
+          Y=$((10#$Y_RAW))
+
+          # Month/Day without leading zeros
+          M=$(date -u +%-m)
+          D=$(date -u +%-d)
+
+          # HHMM as integer (removes any leading zero from hour/minute)
+          HM_RAW=$(date -u +%H%M)   # e.g., 0210
+          HM=$((10#$HM_RAW))        # e.g., 210
+
+          VERSION="${Y}.${M}.${D}.${HM}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Optional human-friendly version name
+          VNAME=$(date -u +'%y.%m.%d-%H:%MZ')
+          echo "version_name=${VNAME}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION} (version_name=${VNAME})"
+
+      - name: Make build script executable
+        run: chmod +x scripts/build-zip.sh
+
+      - name: Update manifest.json (if present)
+        shell: bash
+        run: |
+          if [ -f manifest.json ]; then
+            echo "Updating manifest.json to version ${{ steps.calc_ver.outputs.version }} (version_name=${{ steps.calc_ver.outputs.version_name }})"
+            jq --arg v "${{ steps.calc_ver.outputs.version }}"                --arg vn "${{ steps.calc_ver.outputs.version_name }}"                '.version=$v | .version_name=$vn' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+          else
+            echo "manifest.json not found. Skipping."
+          fi
+
+      - name: Update package.json (if present)
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "Updating package.json to version ${{ steps.calc_ver.outputs.version }}"
+            jq --arg v "${{ steps.calc_ver.outputs.version }}" '.version=$v' package.json > package.json.tmp && mv package.json.tmp package.json
+          else
+            echo "package.json not found. Skipping."
+          fi
+
+      - name: Commit version bumps (if any)
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(release): v${{ steps.calc_ver.outputs.version }} [skip ci]"
+          else
+            echo "No file changes to commit."
+          fi
+
+      - name: Read updated version from manifest.json
+        id: ver
+        run: |
+          VERSION="$(jq -r '.version' manifest.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "manifest.json.version não encontrado"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versão (atualizada): $VERSION"
+
+      - name: Build ZIP
+        run: ./scripts/build-zip.sh
+
+      - name: Locate ZIP built
+        id: zip
+        run: |
+          ZIP_PATH="dist/cosmoware-extension-v${{ steps.ver.outputs.version }}.zip"
+          if [ ! -f "$ZIP_PATH" ]; then
+            # fallback: tenta qualquer .zip em dist/
+            ZIP_PATH=$(ls dist/*.zip 2>/dev/null | head -n1 || true)
+          fi
+          if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
+            echo "Nenhum .zip encontrado em dist/"; exit 1
+          fi
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "ZIP localizado: $ZIP_PATH"
+
+      - name: Generate SHA256 (if missing)
+        id: sha
+        run: |
+          SHA_PATH="${{ steps.zip.outputs.zip_path }}.sha256"
+          if [ ! -f "$SHA_PATH" ]; then
+            sha256sum "${{ steps.zip.outputs.zip_path }}" | awk '{print $1}' > "$SHA_PATH"
+          fi
+          echo "sha_path=$SHA_PATH" >> "$GITHUB_OUTPUT"
+          echo "SHA gerado/em uso: $SHA_PATH"
+
+      - name: Upload artifact (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip
+          path: ${{ steps.zip.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload artifact (SHA256)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmoware-extension-v${{ steps.ver.outputs.version }}.zip.sha256
+          path: ${{ steps.sha.outputs.sha_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Generate changelog since last tag
+        id: changelog
+        shell: bash
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            echo "Last tag: $LAST_TAG"
+            echo "## Changes since $LAST_TAG" > body.md
+            git log --pretty=format:'- %s (%h)' ${LAST_TAG}..HEAD >> body.md
+          else
+            echo "No previous tag. Listing all commits."
+            echo "## Initial Release Notes" > body.md
+            git log --pretty=format:'- %s (%h)' >> body.md
+          fi
+          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        shell: bash
+        run: |
+          VERSION="v${{ steps.ver.outputs.version }}"
+          DATE=$(date -u +'%Y-%m-%d')
+          echo "### ${VERSION} - ${DATE}" > tmp.md
+          cat body.md >> tmp.md
+          echo "" >> tmp.md
+          if [ -f CHANGELOG.md ]; then
+            cat CHANGELOG.md >> tmp.md
+          fi
+          mv tmp.md CHANGELOG.md
+          if ! git diff --quiet; then
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): update for ${VERSION} [skip ci]"
+            git push origin HEAD:main || true
+          else
+            echo "No changes to CHANGELOG.md."
+          fi
+
+      - name: Create tag
+        shell: bash
+        run: |
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin "v${{ steps.ver.outputs.version }}" || {
+            echo "Tag push failed (maybe tag exists)."
+          }
+
+      - name: Create GitHub Release (with assets)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.ver.outputs.version }}"
+          name: "v${{ steps.ver.outputs.version }}"
+          body_path: "${{ steps.changelog.outputs.body_path }}"
+          files: |
+            ${{ steps.zip.outputs.zip_path }}
+            ${{ steps.sha.outputs.sha_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
 <file path="README.md">
