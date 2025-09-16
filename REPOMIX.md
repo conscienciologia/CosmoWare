@@ -2118,58 +2118,6 @@ Veja `AI_GUIDE.md` para instruções detalhadas de prompts.
 - [ ] (Opcional) Colou o prompt usado com IA?
 </file>
 
-<file path="manifest.json">
-{
-  "manifest_version": 3,
-  "name": "Conscienciologia Tools (CosmoWare)",
-  "version": "0.4.0",
-  "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
-  "permissions": [
-    "scripting",
-    "activeTab"
-  ],
-  "host_permissions": [
-    "https://*.conscienciologia.org.br/*",
-    "https://kroki.io/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.conscienciologia.org.br/*"
-      ],
-      "js": [
-        "core/content.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "core/utils.js",
-        "core/global-rules.js",
-        "domains/*/main.js",
-        "domains/*/*.js",
-        "domains/icnet/styles.css",
-        "domains/icnet/shared/export-grid.js",
-        "domains/icnet/icnet-utils.js",
-        "domains/*/**/*.js",
-        "domains/*/**/**/*.js"
-      ],
-      "matches": [
-        "https://*.conscienciologia.org.br/*"
-      ]
-    }
-  ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
-}
-</file>
-
 <file path="AI_GUIDE.md">
 # AI Guide — Como usar IA para criar e manter funcionalidades do CosmoWare
 
@@ -2364,6 +2312,58 @@ console.log("[ICNET/EXPORT] toolbar criada");
 - `domains/icnet/icnet-utils.js`
 
 > Estes arquivos estão sempre no `REPOMIX.md` e servem como exemplos.
+</file>
+
+<file path="manifest.json">
+{
+  "manifest_version": 3,
+  "name": "Conscienciologia Tools (CosmoWare)",
+  "version": "1.0.0",
+  "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
+  "permissions": [
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://*.conscienciologia.org.br/*",
+    "https://kroki.io/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ],
+      "js": [
+        "core/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "core/utils.js",
+        "core/global-rules.js",
+        "domains/*/main.js",
+        "domains/*/*.js",
+        "domains/icnet/styles.css",
+        "domains/icnet/shared/export-grid.js",
+        "domains/icnet/icnet-utils.js",
+        "domains/*/**/*.js",
+        "domains/*/**/**/*.js"
+      ],
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
 </file>
 
 <file path=".github/workflows/release.yml">
