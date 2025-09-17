@@ -51,7 +51,7 @@ Gera automaticamente um organograma a partir dos dados da tela administrativa, c
 
 ## ICNet — Exportar tabelas (qualquer página)
 
-Em qualquer tela do ICNet com uma tabela, é possíve exportar os dados para uma planilha.
+A extensão adiciona um botão para exportar os dados de qualquer tabela. Em qualquer tela do ICNet com uma tabela, é possíve exportar os dados para uma planilha.
 
 ![](doc/expotar-exportar-planilhas.png)
 
