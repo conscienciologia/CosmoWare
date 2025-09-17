@@ -30,12 +30,12 @@ TIP: caso seja um desenvolvedor veja a Instalação (modo desenvolvedor) mais ab
 
 ### ICNet — Pessoa Física » Voluntário — **WBS do Voluntariado**
 
-Gera um **diagrama WBS (Work Breakdown Structure)** em imagem a partir da tabela de voluntários.
+Gera automaticamente organograma contendo os voluntários da instituição a partir dos dados da tela administrativa.
 
-- ✅ **Toolbar discreta** antes da tabela com:
-  - **🖼️ Gerar Imagem** (único gatilho de geração)
-  - **Formato: PNG / SVG** (persistente via `localStorage`)
-  - **Baixar imagem** (habilitado após a geração)
+1. Abra a tela **Pessoa Física » Voluntário** no ICNet.
+2. Na toolbar inserida pela extensão, clique em **🖼️ Gerar Imagem**.
+3. (Opcional) Escolha o **formato** (PNG/SVG). O formato escolhido é **lembrado** entre páginas.
+4. Após a renderização, use **Baixar imagem** para salvar o arquivo.
 
 ![](doc/feature-pessoa-fisica-voluntario.png)
 
@@ -49,14 +49,11 @@ Gera automaticamente um organograma a partir dos dados da tela administrativa, c
 
 ---
 
-## 🖥️ Como usar (Pessoa Física » Voluntário)
+## ICNet — Exportar tabelas (qualquer página)
 
-1. Abra a tela **Pessoa Física » Voluntário** no ICNet.
-2. Na toolbar inserida pela extensão, clique em **🖼️ Gerar Imagem**.
-3. (Opcional) Escolha o **formato** (PNG/SVG). O formato escolhido é **lembrado** entre páginas.
-4. Após a renderização, use **Baixar imagem** para salvar o arquivo.
+Em qualquer tela do ICNet com uma tabela, é possíve exportar os dados para uma planilha.
 
-> Nas telas não reconhecidas, a extensão **não interfere**.
+![](doc/expotar-exportar-planilhas.png)
 
 ---
 
