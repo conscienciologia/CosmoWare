@@ -57,20 +57,11 @@ A extensão adiciona um botão para exportar os dados de qualquer tabela. Em qua
 
 ---
 
-## 🩺 Solução de problemas
-
-- **Botões não aparecem**: confirme se o breadcrumb é exatamente **Pessoa Física » Voluntário**.
-- **Sem preview/erro de rede**: verifique conexão com `https://kroki.io/` (bloqueadores podem impedir).
-- **SVG não baixa**: assegure que o navegador permita baixar **Blob URLs**; tente PNG como alternativa.
-- **Dados diferentes após paginação**: esta feature só gera a imagem quando você clicar em **Gerar Imagem** (não gera automaticamente).
-
----
-
 ## 🔒 Privacidade
 
 - Lemos apenas o conteúdo da **página atual**, sem capturar dados pessoais para fora do navegador.
 - Para renderizar diagramas, usamos **Kroki.io**: enviamos **apenas o texto do PlantUML** necessário.
-- Detalhes em [`SECURITY.md`](./SECURITY.md).
+- Detalhes em [`PRIVACY.md`](./PRIVACY.md).
 
 ---
 
