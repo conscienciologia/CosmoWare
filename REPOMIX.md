@@ -2448,58 +2448,6 @@ console.log("[ICNET/EXPORT] toolbar criada");
 > Estes arquivos estão sempre no `REPOMIX.md` e servem como exemplos.
 </file>
 
-<file path="manifest.json">
-{
-  "manifest_version": 3,
-  "name": "Conscienciologia Tools (CosmoWare)",
-  "version": "1.0.0",
-  "description": "Extensão modular por domínio e por tela para *.conscienciologia.org.br",
-  "permissions": [
-    "scripting",
-    "activeTab"
-  ],
-  "host_permissions": [
-    "https://*.conscienciologia.org.br/*",
-    "https://kroki.io/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.conscienciologia.org.br/*"
-      ],
-      "js": [
-        "core/content.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "core/utils.js",
-        "core/global-rules.js",
-        "domains/*/main.js",
-        "domains/*/*.js",
-        "domains/icnet/styles.css",
-        "domains/icnet/shared/export-grid.js",
-        "domains/icnet/icnet-utils.js",
-        "domains/*/**/*.js",
-        "domains/*/**/**/*.js"
-      ],
-      "matches": [
-        "https://*.conscienciologia.org.br/*"
-      ]
-    }
-  ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
-}
-</file>
-
 <file path=".github/workflows/release.yml">
 name: Release
 
@@ -2695,12 +2643,64 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
+<file path="manifest.json">
+{
+  "manifest_version": 3,
+  "name": "Conscienciologia Tools (CosmoWare)",
+  "version": "1.0.0",
+  "description": "Extensão modular por domínio e por tela para icnet.conscienciologia.org.br",
+  "permissions": [
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://*.conscienciologia.org.br/*",
+    "https://kroki.io/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ],
+      "js": [
+        "core/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "core/utils.js",
+        "core/global-rules.js",
+        "domains/*/main.js",
+        "domains/*/*.js",
+        "domains/icnet/styles.css",
+        "domains/icnet/shared/export-grid.js",
+        "domains/icnet/icnet-utils.js",
+        "domains/*/**/*.js",
+        "domains/*/**/**/*.js"
+      ],
+      "matches": [
+        "https://*.conscienciologia.org.br/*"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
+</file>
+
 <file path="README.md">
 # CosmoWare
 
 [![RepoMix](https://img.shields.io/badge/RepoMix-enabled-4B8BF4)](https://repomix.com)
 
-**CosmoWare** é uma extensão de navegador para **reduzir o assédio digital** no uso dos sistemas da Conscienciologia (`*.conscienciologia.org.br`).  
+**CosmoWare** é uma extensão de navegador para **reduzir o assédio digital** no uso dos sistemas da Conscienciologia (`icnet.conscienciologia.org.br`).  
 Ela adiciona melhorias simples e úteis em telas específicas, sem alterar o funcionamento original dos sistemas.
 
 📦 Contexto do repositório para IA: veja **[REPOMIX.md](./REPOMIX.md)**
@@ -2712,11 +2712,22 @@ Ela adiciona melhorias simples e úteis em telas específicas, sem alterar o fun
 Apoiar o voluntário na **autogestão lúcida**, tornando o uso dos sistemas mais **claro, leve e produtivo**.  
 Cada funcionalidade busca diminuir atritos, automatizar tarefas repetitivas e promover mais **cosmoética digital**.
 
+## 🔧 Instalação (modo usuário)
+
+Acesse a [páginda da extensão na loja do Chrome](https://chromewebstore.google.com/detail/mamilhfnkleimaphdjpkinkekdbkbacl?utm_source=item-github-readme)
+
+![](doc/2025-09-17_09-27-chrome-install.png)
+
+Clique em Adicionar no Crome, conforme a figura acima.
+
+TIP: caso seja um desenvolvedor veja a Instalação (modo desenvolvedor) mais abaixo.
+
 ---
 
 ## 🚀 Funcionalidades
 
 ### ICNet — Pessoa Física » Voluntário — **WBS do Voluntariado**
+
 Gera um **diagrama WBS (Work Breakdown Structure)** em imagem a partir da tabela de voluntários.
 
 - ✅ **Toolbar discreta** antes da tabela com:
@@ -2729,15 +2740,44 @@ Gera um **diagrama WBS (Work Breakdown Structure)** em imagem a partir da tabela
 ---
 
 ### ICNet — Configuração IC » Organograma (clássico)
-Gera automaticamente um organograma a partir dos dados da tela administrativa, com **download de PNG** nomeado com IC e data/hora.  
+
+Gera automaticamente um organograma a partir dos dados da tela administrativa, com **download de PNG** nomeado com IC e data/hora.
 
 ![](doc/feature-configuracoes-ic-organograma-voluntario.png)
 
 ---
 
+## 🖥️ Como usar (Pessoa Física » Voluntário)
+
+1. Abra a tela **Pessoa Física » Voluntário** no ICNet.
+2. Na toolbar inserida pela extensão, clique em **🖼️ Gerar Imagem**.
+3. (Opcional) Escolha o **formato** (PNG/SVG). O formato escolhido é **lembrado** entre páginas.
+4. Após a renderização, use **Baixar imagem** para salvar o arquivo.
+
+> Nas telas não reconhecidas, a extensão **não interfere**.
+
+---
+
+## 🩺 Solução de problemas
+
+- **Botões não aparecem**: confirme se o breadcrumb é exatamente **Pessoa Física » Voluntário**.
+- **Sem preview/erro de rede**: verifique conexão com `https://kroki.io/` (bloqueadores podem impedir).
+- **SVG não baixa**: assegure que o navegador permita baixar **Blob URLs**; tente PNG como alternativa.
+- **Dados diferentes após paginação**: esta feature só gera a imagem quando você clicar em **Gerar Imagem** (não gera automaticamente).
+
+---
+
+## 🔒 Privacidade
+
+- Lemos apenas o conteúdo da **página atual**, sem capturar dados pessoais para fora do navegador.
+- Para renderizar diagramas, usamos **Kroki.io**: enviamos **apenas o texto do PlantUML** necessário.
+- Detalhes em [`SECURITY.md`](./SECURITY.md).
+
+---
+
 ## 🔧 Instalação (modo desenvolvedor)
 
-1. Baixe o [código fonte zip](https://github.com/conscienciologia/CosmoWare/releases/latest/) 
+1. Baixe o [código fonte zip](https://github.com/conscienciologia/CosmoWare/releases/latest/)
 2. No Chrome/Brave, abra: `chrome://extensions`
 3. Ative **Developer mode / Modo desenvolvedor**
 4. Clique em **Load unpacked / Carregar sem empacotar**
@@ -2747,55 +2787,27 @@ Pronto ✅ A extensão será carregada e atuará **somente nas telas suportadas*
 
 ---
 
-## 🖥️ Como usar (Pessoa Física » Voluntário)
-
-1. Abra a tela **Pessoa Física » Voluntário** no ICNet.  
-2. Na toolbar inserida pela extensão, clique em **🖼️ Gerar Imagem**.  
-3. (Opcional) Escolha o **formato** (PNG/SVG). O formato escolhido é **lembrado** entre páginas.  
-4. Após a renderização, use **Baixar imagem** para salvar o arquivo.  
-
-> Nas telas não reconhecidas, a extensão **não interfere**.
-
----
-
-## 🩺 Solução de problemas
-
-- **Botões não aparecem**: confirme se o breadcrumb é exatamente **Pessoa Física » Voluntário**.  
-- **Sem preview/erro de rede**: verifique conexão com `https://kroki.io/` (bloqueadores podem impedir).  
-- **SVG não baixa**: assegure que o navegador permita baixar **Blob URLs**; tente PNG como alternativa.  
-- **Dados diferentes após paginação**: esta feature só gera a imagem quando você clicar em **Gerar Imagem** (não gera automaticamente).
-
----
-
-## 🔒 Privacidade
-
-- Lemos apenas o conteúdo da **página atual**, sem capturar dados pessoais para fora do navegador.  
-- Para renderizar diagramas, usamos **Kroki.io**: enviamos **apenas o texto do PlantUML** necessário.  
-- Detalhes em [`SECURITY.md`](./SECURITY.md).  
-
----
-
 ## 🤝 Como contribuir
 
-CosmoWare é **aberto a contribuições humanas e via IA**.  
+CosmoWare é **aberto a contribuições humanas e via IA**.
 
-- Sugira novas features: abra uma [issue](./.github/ISSUE_TEMPLATE/feature_request.md)  
-- Contribua com código: veja [`CONTRIBUTING.md`](./CONTRIBUTING.md)  
-- Entenda a arquitetura: [`ARCHITECTURE.md`](./ARCHITECTURE.md)  
-- Guia de dev: [`DEVELOPMENT.md`](./DEVELOPMENT.md)  
-- Uso de IA no projeto: [`AI_GUIDE.md`](./AI_GUIDE.md)  
+- Sugira novas features: abra uma [issue](./.github/ISSUE_TEMPLATE/feature_request.md)
+- Contribua com código: veja [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Entenda a arquitetura: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- Guia de dev: [`DEVELOPMENT.md`](./DEVELOPMENT.md)
+- Uso de IA no projeto: [`AI_GUIDE.md`](./AI_GUIDE.md)
 
 ---
 
 ## 📜 Licença & Conduta
 
-- Projeto comunitário e aberto  
-- Siga o [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) para manter um ambiente **cosmoético e acolhedor**  
+- Projeto comunitário e aberto
+- Siga o [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) para manter um ambiente **cosmoético e acolhedor**
 
 ---
 
 > ✨ **CosmoWare = Cosmoética + Software** ✨  
-Promovendo lucidez, organização e leveza no uso da tecnologia.
+> Promovendo lucidez, organização e leveza no uso da tecnologia.
 
 # Suporte
 
